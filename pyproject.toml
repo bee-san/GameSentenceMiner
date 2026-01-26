@@ -91,6 +91,13 @@ gpu = [
   "onnxruntime-gpu[cudnn,cuda]",
 ]
 
+rocm = [
+  # ROCm support for AMD GPUs (Steam Deck, AMD discrete GPUs)
+  # Note: PyTorch with ROCm must be installed separately:
+  # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
+  "onnxruntime-rocm",
+]
+
 # This creates a command-line script named `gamesentenceminer` that will
 # call the `main()` function defined in the package's __main__.py (or wherever
 # you've placed your entry function). Adjust the import path as needed.

@@ -10,7 +10,7 @@ from abc import abstractmethod, ABC
 
 from GameSentenceMiner import mecab
 from GameSentenceMiner.util import configuration, ffmpeg
-from GameSentenceMiner.util.configuration import get_config, get_temporary_directory, is_cuda_available, logger, SILERO, WHISPER
+from GameSentenceMiner.util.configuration import get_config, get_temporary_directory, is_cuda_available, is_gpu_available, get_gpu_type, logger, SILERO, WHISPER
 from GameSentenceMiner.util.ffmpeg import get_audio_length
 from GameSentenceMiner.util.gsm_utils import make_unique_file_name, run_new_thread
 from GameSentenceMiner.util.model import VADResult
@@ -181,10 +181,14 @@ class WhisperVADProcessor(VADProcessor):
             model_name = get_config().vad.whisper_model
 
             # Default to trying GPU with float16 (fastest on most modern GPUs)
-            device = "cuda" if is_cuda_available() and not get_config().vad.use_cpu_for_inference else "cpu"
+            # Note: ROCm uses "cuda" device name via HIP compatibility layer
+            gpu_type = get_gpu_type()
+            use_gpu = is_gpu_available() and not get_config().vad.use_cpu_for_inference
+            device = "cuda" if use_gpu else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"  # int8 is fastest/lowest memory on CPU
 
-            logger.info(f"Attempting to load Whisper model '{model_name}' on {device} with compute_type='{compute_type}'...")
+            device_desc = f"{device} ({gpu_type})" if use_gpu else device
+            logger.info(f"Attempting to load Whisper model '{model_name}' on {device_desc} with compute_type='{compute_type}'...")
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -194,7 +198,7 @@ class WhisperVADProcessor(VADProcessor):
                         device=device,
                         compute_type=compute_type,
                     )
-                    logger.info(f"Whisper model '{model_name}' loaded successfully on {device} (compute_type='{compute_type}').")
+                    logger.info(f"Whisper model '{model_name}' loaded successfully on {device_desc} (compute_type='{compute_type}').")
                 except Exception as e:  # Catches CUDA library errors, unsupported device, etc.
                     logger.warning(f"GPU loading failed ({str(e)}), falling back to CPU with int8 quantization...")
                     device = "cpu"

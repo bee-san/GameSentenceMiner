@@ -1200,6 +1200,7 @@ def add_gpu_dlls_to_path():
     #     logger.warning(f"GPU Support path does not exist: {gpu_path}")
     
 def is_cuda_available():
+    """Check if NVIDIA CUDA is available."""
     try:
         if is_windows():
             cuda_found = False
@@ -1211,13 +1212,14 @@ def is_cuda_available():
                         cuda_found = True
                     elif pkg == "nvidia.cudnn":
                         cudnn_found = True
-            
+
             if cuda_found and cudnn_found:
                 return True
         elif is_linux():
             try:
                 import torch
-                if torch.cuda.is_available():
+                # Check if this is actually CUDA (not ROCm masquerading as CUDA)
+                if torch.cuda.is_available() and not is_rocm_available():
                     logger.info("CUDA support found via PyTorch")
                     return True
             except ImportError:
@@ -1225,6 +1227,40 @@ def is_cuda_available():
     except Exception as e:
         pass
     return False
+
+
+def is_rocm_available():
+    """Check if AMD ROCm is available (for AMD GPUs like Steam Deck)."""
+    try:
+        import torch
+        # ROCm builds of PyTorch set torch.version.hip
+        if hasattr(torch.version, 'hip') and torch.version.hip is not None:
+            if torch.cuda.is_available():  # ROCm uses CUDA API compatibility layer (HIP)
+                logger.info(f"ROCm support found via PyTorch (HIP version: {torch.version.hip})")
+                return True
+    except ImportError:
+        pass
+    except Exception as e:
+        pass
+    return False
+
+
+def is_gpu_available():
+    """Check if any GPU acceleration is available (CUDA or ROCm)."""
+    return is_cuda_available() or is_rocm_available()
+
+
+def get_gpu_type():
+    """Get the type of GPU acceleration available.
+
+    Returns:
+        str: 'cuda' for NVIDIA, 'rocm' for AMD, or 'cpu' if no GPU available
+    """
+    if is_rocm_available():
+        return 'rocm'
+    elif is_cuda_available():
+        return 'cuda'
+    return 'cpu'
 
 def get_app_directory():
     if platform == 'win32':  # Windows
