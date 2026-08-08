@@ -22,6 +22,8 @@ interface TestArchive {
     sourceLanguage?: string | null;
     japanese?: boolean;
     terms?: number;
+    media?: number;
+    omitGeneratedMediaCount?: boolean;
     isUpdatable?: boolean;
     indexUrl?: string;
     downloadUrl?: string;
@@ -95,6 +97,18 @@ function writeImportedDictionary(outputDir: string, archive: TestArchive): void 
     for (const fileName of ['.hoshidicts_3', 'hash.table', 'bloom.filter', 'blobs.bin']) {
         fs.writeFileSync(path.join(dictionaryDir, fileName), fileName, 'utf8');
     }
+    if ((archive.media ?? 0) > 0) {
+        fs.writeFileSync(path.join(dictionaryDir, 'media.idx'), 'media-index', 'utf8');
+        fs.writeFileSync(path.join(dictionaryDir, 'media.bin'), 'media-data', 'utf8');
+    }
+    const counts: Record<string, unknown> = {
+        terms: { total: archive.terms ?? 1 },
+        termMeta: {},
+        kanji: { total: 0 },
+    };
+    if (!archive.omitGeneratedMediaCount) {
+        counts.media = { total: archive.media ?? 0 };
+    }
     fs.writeFileSync(
         path.join(dictionaryDir, 'index.json'),
         JSON.stringify({
@@ -105,11 +119,7 @@ function writeImportedDictionary(outputDir: string, archive: TestArchive): void 
             indexUrl: archive.indexUrl,
             downloadUrl: archive.downloadUrl,
             importDate: Date.now(),
-            counts: {
-                terms: { total: archive.terms ?? 1 },
-                termMeta: {},
-                kanji: { total: 0 },
-            },
+            counts,
         }),
         'utf8'
     );
@@ -148,6 +158,7 @@ function createHarness(baseDir: string, overrides: Partial<HoshidictsManagerDepe
                 success: true,
                 title: archive.title,
                 termCount: archive.terms ?? 1,
+                mediaCount: archive.media ?? 0,
                 error: '',
             };
         }
@@ -363,6 +374,7 @@ describe('Hoshidicts immutable generations', () => {
                     success: true,
                     title: archive.title,
                     termCount: archive.terms ?? 1,
+                    mediaCount: archive.media ?? 0,
                     error: '',
                 };
             },
@@ -850,6 +862,167 @@ describe('Hoshidicts import policy', () => {
         expect((await manager.getSnapshot()).dictionaries).toEqual([]);
     });
 
+    it('accepts a legacy generated index without a media count or media files', async () => {
+        const baseDir = makeTempDir();
+        const archive = writeArchive(makeTempDir(), 'legacy-no-media.zip', {
+            title: 'Legacy no media',
+            revision: 'one',
+            sourceLanguage: 'ja',
+            omitGeneratedMediaCount: true,
+        });
+        const { manager } = createHarness(baseDir);
+
+        await manager.importDictionary(archive);
+
+        expect((await manager.getSnapshot()).dictionaries).toHaveLength(1);
+    });
+
+    it.each([
+        ['media.idx', 'missing'],
+        ['media.bin', 'missing'],
+        ['media.idx', 'empty'],
+        ['media.bin', 'empty'],
+    ])(
+        'rejects a generated media dictionary when %s is %s before publication',
+        async (mediaFile, condition) => {
+            const baseDir = makeTempDir();
+            const archive = writeArchive(makeTempDir(), 'media.zip', {
+                title: 'Media dictionary',
+                revision: 'one',
+                sourceLanguage: 'ja',
+                media: 1,
+            });
+            const { manager, reloadNative } = createHarness(baseDir, {
+                runImport: async (archivePath, outputDir) => {
+                    const imported = readArchive(archivePath);
+                    writeImportedDictionary(outputDir, imported);
+                    const mediaPath = path.join(outputDir, imported.title, mediaFile);
+                    if (condition === 'missing') {
+                        fs.rmSync(mediaPath);
+                    } else {
+                        fs.writeFileSync(mediaPath, '');
+                    }
+                    return {
+                        success: true,
+                        title: imported.title,
+                        termCount: imported.terms ?? 1,
+                        mediaCount: imported.media ?? 0,
+                        error: '',
+                    };
+                },
+            });
+
+            await expect(manager.importDictionary(archive)).rejects.toThrow(
+                condition === 'missing'
+                    ? `Dictionary is missing ${mediaFile}`
+                    : `Dictionary file ${mediaFile} is empty or not a file.`
+            );
+
+            expect(reloadNative).not.toHaveBeenCalled();
+            expect((await manager.getSnapshot()).dictionaries).toEqual([]);
+        }
+    );
+
+    it('keeps the working generation when replacement media validation fails', async () => {
+        const baseDir = makeTempDir();
+        const archivesDir = makeTempDir();
+        const working = writeArchive(archivesDir, 'working.zip', {
+            title: 'Media replacement',
+            revision: 'working',
+            sourceLanguage: 'ja',
+        });
+        const broken = writeArchive(archivesDir, 'broken.zip', {
+            title: 'Media replacement',
+            revision: 'broken',
+            sourceLanguage: 'ja',
+            media: 1,
+        });
+        const { manager, reloadNative } = createHarness(baseDir, {
+            runImport: async (archivePath, outputDir) => {
+                const imported = readArchive(archivePath);
+                writeImportedDictionary(outputDir, imported);
+                if ((imported.media ?? 0) > 0) {
+                    fs.rmSync(path.join(outputDir, imported.title, 'media.bin'));
+                }
+                return {
+                    success: true,
+                    title: imported.title,
+                    termCount: imported.terms ?? 1,
+                    mediaCount: imported.media ?? 0,
+                    error: '',
+                };
+            },
+        });
+
+        await manager.importDictionary(working);
+        const previousManifest = readManifest(baseDir);
+
+        await expect(manager.importDictionary(broken)).rejects.toThrow(
+            'Dictionary is missing media.bin'
+        );
+
+        const snapshot = await manager.getSnapshot();
+        expect(snapshot.dictionaries).toHaveLength(1);
+        expect(snapshot.dictionaries[0].revision).toBe('working');
+        expect(readManifest(baseDir)).toEqual(previousManifest);
+        expect(reloadNative).toHaveBeenCalledTimes(1);
+    });
+
+    it('honors the importer media count when the generated index omits it', async () => {
+        const baseDir = makeTempDir();
+        const archive = writeArchive(makeTempDir(), 'reported-media.zip', {
+            title: 'Reported media',
+            revision: 'one',
+            sourceLanguage: 'ja',
+            media: 1,
+            omitGeneratedMediaCount: true,
+        });
+        const { manager, reloadNative } = createHarness(baseDir, {
+            runImport: async (archivePath, outputDir) => {
+                const imported = readArchive(archivePath);
+                writeImportedDictionary(outputDir, imported);
+                fs.rmSync(path.join(outputDir, imported.title, 'media.idx'));
+                return {
+                    success: true,
+                    title: imported.title,
+                    termCount: imported.terms ?? 1,
+                    mediaCount: imported.media ?? 0,
+                    error: '',
+                };
+            },
+        });
+
+        await expect(manager.importDictionary(archive)).rejects.toThrow(
+            'Dictionary is missing media.idx'
+        );
+        expect(reloadNative).not.toHaveBeenCalled();
+    });
+
+    it('rejects an installed media generation after a required media file is lost', async () => {
+        const baseDir = makeTempDir();
+        const archive = writeArchive(makeTempDir(), 'media.zip', {
+            title: 'Media dictionary',
+            revision: 'one',
+            sourceLanguage: 'ja',
+            media: 2,
+        });
+        const { manager } = createHarness(baseDir);
+        await manager.importDictionary(archive);
+        const manifest = readManifest(baseDir);
+        const dictionaryPath = path.join(
+            baseDir,
+            'dictionaries',
+            'hoshidicts',
+            ...manifest.dictionaries[0].path.split('/')
+        );
+        fs.rmSync(path.join(dictionaryPath, 'media.bin'));
+
+        const snapshot = await manager.getSnapshot();
+
+        expect(snapshot.dictionaries).toEqual([]);
+        expect(snapshot.lastError).toContain('Dictionary is missing media.bin');
+    });
+
     it('rejects importer titles which escape the staging directory', async () => {
         const baseDir = makeTempDir();
         const archive = writeArchive(makeTempDir(), 'unsafe.zip', {
@@ -862,6 +1035,7 @@ describe('Hoshidicts import policy', () => {
                 success: true,
                 title: '../Unsafe',
                 termCount: 1,
+                mediaCount: 0,
                 error: '',
             }),
         });

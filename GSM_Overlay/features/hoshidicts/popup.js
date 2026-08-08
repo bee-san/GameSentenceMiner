@@ -225,7 +225,7 @@
       }
     }
 
-    function renderResults(results, candidate) {
+    function renderResults(results, candidate, renderContext = {}) {
       clear();
       const feedback = documentRef.createElement("div");
       feedback.className = "gsm-hoshidicts-mining-feedback";
@@ -305,6 +305,7 @@
           const details = documentRef.createElement("details");
           details.className = "gsm-hoshidicts-glossary-card";
           details.open = dictionaryIndex === 0;
+          details.addEventListener("toggle", positionPopup);
           const summary = documentRef.createElement("summary");
           summary.textContent = dictionary;
           details.appendChild(summary);
@@ -325,7 +326,12 @@
             }
             const content = documentRef.createElement("div");
             content.className = "gsm-hoshidicts-glossary-content";
-            appendTextOnlyGlossary(documentRef, content, glossary.glossary);
+            appendTextOnlyGlossary(documentRef, content, glossary.glossary, {
+              dictionary,
+              generation: renderContext.generation,
+              onLayoutChange: positionPopup,
+              resolveMedia: renderContext.resolveMedia,
+            });
             definition.appendChild(content);
             definitions.appendChild(definition);
           }
