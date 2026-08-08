@@ -1121,6 +1121,95 @@ describe("Hoshidicts safe popup rendering", () => {
     expect(onLayoutChange).toHaveBeenCalledTimes(3);
   });
 
+  it("applies scoped dictionary CSS and exposes Yomitan structured-content hooks", async () => {
+    const harness = createReaderHarness();
+    const dictionaryCss =
+      'span[data-sc-content="part-of-speech-info"] { color: #f0c040; }';
+
+    await renderFirstLookup(harness, {
+      transform(response) {
+        Object.assign(response, {
+          styles: [{ dictionary: "JMdict", css: dictionaryCss }]
+        });
+        response.results[0].term.glossaries[0].glossary = JSON.stringify({
+          type: "structured-content",
+          content: [
+            {
+              tag: "span",
+              data: {
+                class: "tag",
+                content: "part-of-speech-info"
+              },
+              title: "Part of speech",
+              content: "verb"
+            },
+            {
+              tag: "table",
+              data: { content: "forms" },
+              content: [
+                {
+                  tag: "tbody",
+                  content: [
+                    {
+                      tag: "tr",
+                      content: [
+                        {
+                          tag: "td",
+                          data: { class: "form-pri" },
+                          content: "食"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        });
+      }
+    });
+
+    const document = harness.dom.window.document;
+    const style = document.head.querySelector<HTMLStyleElement>(
+      "style#gsm-hoshidicts-dictionary-styles"
+    );
+    expect(style?.dataset.hoshidictsDictionaryStyles).toBe("true");
+    expect(style?.textContent).toContain('[data-dictionary="JMdict"] {');
+    expect(style?.textContent).toContain(dictionaryCss);
+    expect(
+      document.querySelectorAll("style[data-hoshidicts-dictionary-styles]")
+    ).toHaveLength(1);
+
+    const dictionary = document.querySelector<HTMLElement>(
+      '.gsm-hoshidicts-glossary-card[data-dictionary="JMdict"]'
+    );
+    expect(dictionary).not.toBeNull();
+    expect(dictionary?.matches(".definition-item")).toBe(true);
+    expect(dictionary?.querySelector(".gloss-list")).not.toBeNull();
+    expect(dictionary?.querySelector(".gloss-item")).not.toBeNull();
+
+    const content = dictionary?.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-glossary-content.gloss-content.structured-content"
+    );
+    const tag = content?.querySelector<HTMLElement>(
+      'span.gloss-sc-span[data-sc-class="tag"][data-sc-content="part-of-speech-info"]'
+    );
+    expect(tag?.title).toBe("Part of speech");
+    expect(tag?.textContent).toBe("verb");
+    expect(
+      content?.querySelector(
+        '.gloss-sc-table-container > table.gloss-sc-table[data-sc-content="forms"]'
+      )
+    ).not.toBeNull();
+    expect(
+      content?.querySelector(
+        'td.gloss-sc-td[data-sc-class="form-pri"]'
+      )?.textContent
+    ).toBe("食");
+
+    harness.reader.destroy();
+  });
+
   it("clamps the popup beside the anchor inside the viewport", () => {
     const dom = createDom();
     const api = loadReaderModule(dom.window as unknown as Window);

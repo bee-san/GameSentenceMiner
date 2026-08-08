@@ -1060,7 +1060,8 @@
         }
         for (const [dictionary, glossaries] of groupedGlossaries) {
           const details = documentRef.createElement("details");
-          details.className = "gsm-hoshidicts-glossary-card";
+          details.className = "gsm-hoshidicts-glossary-card definition-item";
+          details.dataset.dictionary = dictionary;
           details.open = true;
           details.addEventListener("toggle", positionPopup);
           const summary = documentRef.createElement("summary");
@@ -1069,10 +1070,11 @@
           summary.setAttribute("aria-label", dictionary);
           details.appendChild(summary);
           const definitions = documentRef.createElement("ol");
-          definitions.className = "gsm-hoshidicts-definitions";
+          definitions.className = "gsm-hoshidicts-definitions gloss-list";
           applyDefinitionBlurState(definitions);
           for (const glossary of glossaries) {
             const definition = documentRef.createElement("li");
+            definition.className = "gloss-item";
             const definitionTags = parseTagList(glossary.definitionTags);
             if (definitionTags.length > 0) {
               const definitionTagRow = documentRef.createElement("div");
@@ -1085,7 +1087,7 @@
               definition.appendChild(definitionTagRow);
             }
             const content = documentRef.createElement("div");
-            content.className = "gsm-hoshidicts-glossary-content";
+            content.className = "gsm-hoshidicts-glossary-content gloss-content";
             appendTextOnlyGlossary(documentRef, content, glossary.glossary, {
               dictionary,
               generation: renderContext.generation,

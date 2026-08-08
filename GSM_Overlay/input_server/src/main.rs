@@ -2404,7 +2404,7 @@ async fn hoshidicts_lookup_payload(
         .to_string();
     }
 
-    let (result, dictionary_count, generation) = match hoshidicts
+    let (result, dictionary_count, generation, styles) = match hoshidicts
         .run_blocking(move |service| {
             let result = (|| -> Result<(Vec<LookupResult>, Option<LookupKanji>), String> {
                 match mode {
@@ -2435,12 +2435,17 @@ async fn hoshidicts_lookup_payload(
                     }
                 }
             })();
-            (result, service.dictionary_count(), service.generation())
+            (
+                result,
+                service.dictionary_count(),
+                service.generation(),
+                service.styles().to_vec(),
+            )
         })
         .await
     {
         Ok(outcome) => outcome,
-        Err(error) => (Err(error), 0, 0),
+        Err(error) => (Err(error), 0, 0, Vec::new()),
     };
     let payload = match result {
         Ok((results, kanji)) => json!({
@@ -2451,6 +2456,7 @@ async fn hoshidicts_lookup_payload(
             "kanji": kanji,
             "dictionaryCount": dictionary_count,
             "generation": generation,
+            "styles": styles,
             "featureDisabled": false,
             "error": Value::Null,
         }),
@@ -3969,6 +3975,7 @@ mod tests {
         assert_eq!(value["featureDisabled"], false);
         assert_eq!(value["results"], json!([]));
         assert_eq!(value["kanji"], Value::Null);
+        assert_eq!(value["styles"], json!([]));
     }
 
     #[test]

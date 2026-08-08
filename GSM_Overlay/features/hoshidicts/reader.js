@@ -100,6 +100,7 @@
   const MAX_VISIBLE_METADATA_TAGS = 12;
   const MAX_DICTIONARY_PRESENTATION_ENTRIES = 256;
   const MAX_DICTIONARY_PRESENTATION_TITLE_LENGTH = 4096;
+  const DICTIONARY_STYLES_ELEMENT_ID = "gsm-hoshidicts-dictionary-styles";
   const SOURCE_HIGHLIGHT_NAME = "gsm-hoshidicts-match";
   const JAPANESE_TEXT_PATTERN =
     /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u{20000}-\u{2fa1f}]/u;
@@ -201,6 +202,25 @@
 
   function boundedString(value, maxLength = MAX_TEXT_LENGTH) {
     return typeof value === "string" ? value.slice(0, maxLength) : "";
+  }
+
+  function serializeDictionaryStyles(rawStyles) {
+    if (!Array.isArray(rawStyles)) {
+      return "";
+    }
+    return rawStyles.map((rawStyle) => {
+      if (
+        !isRecord(rawStyle) ||
+        typeof rawStyle.dictionary !== "string" ||
+        typeof rawStyle.css !== "string"
+      ) {
+        return "";
+      }
+      const dictionary = rawStyle.dictionary
+        .replace(/\\/gu, "\\\\")
+        .replace(/"/gu, '\\"');
+      return `[data-dictionary="${dictionary}"] {${rawStyle.css}\n}`;
+    }).filter(Boolean).join("\n");
   }
 
   function normalizeActivationKey(value, fallback = DEFAULT_ACTIVATION_KEY) {
@@ -675,8 +695,17 @@
     if (!path || typeof state.resolveMedia !== "function") {
       return;
     }
+    const imageLink = documentRef.createElement("span");
+    imageLink.className = "gloss-image-link";
+    imageLink.dataset.path = path;
+    imageLink.dataset.imageLoadState = "not-loaded";
+    if (typeof state.dictionary === "string") {
+      imageLink.dataset.dictionary = state.dictionary;
+    }
+    const imageContainer = documentRef.createElement("span");
+    imageContainer.className = "gloss-image-container";
     const image = documentRef.createElement("img");
-    image.className = "gsm-hoshidicts-structured-image";
+    image.className = "gsm-hoshidicts-structured-image gloss-image";
     image.alt = isRecord(value.data) && typeof value.data.alt === "string"
       ? value.data.alt.slice(0, 1024)
       : typeof value.alt === "string"
@@ -699,12 +728,18 @@
     const onLayoutChange = typeof state.onLayoutChange === "function"
       ? state.onLayoutChange
       : () => {};
-    image.addEventListener("load", onLayoutChange);
+    image.addEventListener("load", () => {
+      imageLink.dataset.imageLoadState = "loaded";
+      onLayoutChange();
+    });
     image.addEventListener("error", () => {
+      imageLink.dataset.imageLoadState = "load-error";
       image.hidden = true;
       onLayoutChange();
     });
-    parent.appendChild(image);
+    imageContainer.appendChild(image);
+    imageLink.appendChild(imageContainer);
+    parent.appendChild(imageLink);
     let mediaPromise;
     try {
       mediaPromise = Promise.resolve(state.resolveMedia({ path }));
@@ -713,12 +748,35 @@
     }
     mediaPromise.then((url) => {
       if (image.isConnected && typeof url === "string" && url.startsWith("blob:")) {
+        imageLink.dataset.imageLoadState = "loading";
         image.src = url;
       }
     }).catch(() => {
+      imageLink.dataset.imageLoadState = "load-error";
       image.hidden = true;
       onLayoutChange();
     });
+  }
+
+  function applyStructuredData(element, rawData) {
+    if (!isRecord(rawData)) {
+      return;
+    }
+    for (let [key, value] of Object.entries(rawData)) {
+      if (
+        key.length < 1 ||
+        key.length > 128 ||
+        !["string", "number", "boolean"].includes(typeof value)
+      ) {
+        continue;
+      }
+      key = `sc${key[0].toUpperCase()}${key.slice(1)}`;
+      try {
+        element.dataset[key] = String(value).slice(0, 4096);
+      } catch {
+        // Ignore malformed dataset keys while preserving the rest of the content.
+      }
+    }
   }
 
   function appendStructuredValue(documentRef, parent, value, state, depth) {
@@ -784,15 +842,12 @@
     }
 
     const element = documentRef.createElement(tag);
+    element.classList.add(`gloss-sc-${tag}`);
     state.nodes += 1;
     applyStructuredStyle(element, value.style);
-    if (
-      isRecord(value.data) &&
-      typeof value.data.id === "string" &&
-      value.data.id.length <= 256 &&
-      !/[\u0000-\u001f\u007f]/u.test(value.data.id)
-    ) {
-      element.dataset.scId = value.data.id;
+    applyStructuredData(element, value.data);
+    if (typeof value.title === "string") {
+      element.title = value.title.slice(0, 4096);
     }
     if (
       typeof value.lang === "string" &&
@@ -820,7 +875,14 @@
     ) {
       appendStructuredValue(documentRef, element, value.content, state, depth + 1);
     }
-    parent.appendChild(element);
+    if (tag === "table") {
+      const container = documentRef.createElement("div");
+      container.className = "gloss-sc-table-container";
+      container.appendChild(element);
+      parent.appendChild(container);
+    } else {
+      parent.appendChild(element);
+    }
   }
 
   function appendTextOnlyGlossary(documentRef, parent, rawGlossary, options = {}) {
@@ -834,12 +896,16 @@
     } catch {
       // Plain glossary strings are rendered literally, including any HTML-like text.
     }
+    if (isRecord(parsed) && parsed.type === "structured-content") {
+      parent.classList.add("structured-content");
+    }
     appendStructuredValue(
       documentRef,
       parent,
       parsed,
       {
         nodes: 0,
+        dictionary: options.dictionary,
         onLayoutChange: options.onLayoutChange,
         resolveMedia: typeof options.resolveMedia === "function"
           ? ({ path }) => options.resolveMedia({
@@ -1594,6 +1660,23 @@
       setTimeout: setTimeoutFn,
       clearTimeout: clearTimeoutFn,
     });
+    let dictionaryStylesElement = null;
+
+    function setDictionaryStyles(rawStyles) {
+      let style = documentRef.getElementById(DICTIONARY_STYLES_ELEMENT_ID);
+      if (style && style.tagName !== "STYLE") {
+        style.remove();
+        style = null;
+      }
+      if (!style) {
+        style = documentRef.createElement("style");
+        style.id = DICTIONARY_STYLES_ELEMENT_ID;
+        style.dataset.hoshidictsDictionaryStyles = "true";
+        (documentRef.head || documentRef.documentElement).appendChild(style);
+      }
+      style.textContent = serializeDictionaryStyles(rawStyles);
+      dictionaryStylesElement = style;
+    }
 
     function diagnostic(level, event, details = {}) {
       const sink = typeof logger[level] === "function"
@@ -2949,6 +3032,7 @@
         renderLookupNotice(candidate, message, targetDepth, signature);
         return;
       }
+      setDictionaryStyles(payload.styles);
       const dictionaryGeneration = normalizeDictionaryGeneration(payload.generation);
       if (dictionaryGeneration === null) {
         diagnostic("warn", "lookup.media-generation-unavailable", { requestId });
@@ -3601,6 +3685,10 @@
       audioController.destroy();
       clearMediaState("reader_destroyed");
       activeDictionaryGeneration = null;
+      if (dictionaryStylesElement) {
+        dictionaryStylesElement.remove();
+        dictionaryStylesElement = null;
+      }
       if (reconnectTimer !== null) {
         clearTimeoutFn(reconnectTimer);
         reconnectTimer = null;

@@ -612,6 +612,7 @@ fn enabled_by_default() -> bool {
 #[serde(default)]
 struct DictionaryIndex {
     title: String,
+    styles: String,
     counts: DictionaryCounts,
 }
 
@@ -633,10 +634,18 @@ struct ItemCount {
 #[derive(Debug)]
 struct DictionarySpec {
     path: PathBuf,
+    style: Option<DictionaryStyle>,
     has_terms: bool,
     has_frequency: bool,
     has_pitch: bool,
     has_kanji: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictionaryStyle {
+    pub dictionary: String,
+    pub css: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1007,8 +1016,14 @@ fn validate_dictionary_directory(dictionary_path: &Path) -> Result<DictionarySpe
     }
     validate_native_media_files(dictionary_path, index.counts.media.total)?;
 
+    let style = (has_terms && !index.styles.is_empty()).then(|| DictionaryStyle {
+        dictionary: index.title,
+        css: index.styles,
+    });
+
     Ok(DictionarySpec {
         path: dictionary_path.to_path_buf(),
+        style,
         has_terms,
         has_frequency,
         has_pitch,
@@ -1083,11 +1098,19 @@ fn load_dictionary_specs(root: &Path) -> Result<Vec<DictionarySpec>, String> {
     Ok(specs)
 }
 
+fn collect_dictionary_styles(dictionaries: &[DictionarySpec]) -> Vec<DictionaryStyle> {
+    dictionaries
+        .iter()
+        .filter_map(|dictionary| dictionary.style.clone())
+        .collect()
+}
+
 struct NativeEngine {
     lookup: *mut HdLookup,
     query: *mut HdQuery,
     deinflector: *mut HdDeinflector,
     dictionary_count: usize,
+    styles: Vec<DictionaryStyle>,
 }
 
 // Hoshidicts has no thread affinity. Access to an engine is serialized by the
@@ -1097,6 +1120,7 @@ unsafe impl Send for NativeEngine {}
 impl NativeEngine {
     fn load(root: &Path) -> Result<Self, String> {
         let dictionaries = load_dictionary_specs(root)?;
+        let styles = collect_dictionary_styles(&dictionaries);
         let query = unsafe { hd_query_new() };
         if query.is_null() {
             return Err("failed to create native Hoshidicts query".into());
@@ -1161,6 +1185,7 @@ impl NativeEngine {
             query,
             deinflector,
             dictionary_count: dictionaries.len(),
+            styles,
         })
     }
 
@@ -1813,6 +1838,13 @@ impl HoshidictsService {
             .map(|engine| engine.dictionary_count)
             .unwrap_or(0)
     }
+
+    pub fn styles(&self) -> &[DictionaryStyle] {
+        self.engine
+            .as_ref()
+            .map(|engine| engine.styles.as_slice())
+            .unwrap_or(&[])
+    }
 }
 
 #[cfg(test)]
@@ -1907,6 +1939,20 @@ mod tests {
             serde_json::to_vec(&index).expect("serialize dictionary index"),
         )
         .expect("write media count");
+    }
+
+    fn set_dictionary_title_and_styles(dictionary: &Path, title: &str, styles: &str) {
+        let mut index: serde_json::Value = serde_json::from_slice(
+            &fs::read(dictionary.join("index.json")).expect("read dictionary index"),
+        )
+        .expect("parse dictionary index");
+        index["title"] = title.into();
+        index["styles"] = styles.into();
+        fs::write(
+            dictionary.join("index.json"),
+            serde_json::to_vec(&index).expect("serialize dictionary index"),
+        )
+        .expect("write dictionary title and styles");
     }
 
     fn write_native_media_files(dictionary: &Path, entries: &[(&str, &[u8])]) {
@@ -2257,9 +2303,63 @@ mod tests {
         assert!(!spec.has_frequency);
         assert!(!spec.has_pitch);
         assert!(!spec.has_kanji);
+        assert!(spec.style.is_none());
         assert_eq!(
             spec.query_kinds().collect::<Vec<_>>(),
             [DictionaryKind::Term]
+        );
+    }
+
+    #[test]
+    fn dictionary_styles_use_canonical_titles_and_only_enabled_term_dictionaries() {
+        let root = TestDir::new("styles");
+        let styled_term = write_dictionary(&root.0, "term-folder", 1, 0);
+        set_dictionary_title_and_styles(
+            &styled_term,
+            "Canonical Term Dictionary",
+            ".gloss-sc-span { color: red; }",
+        );
+
+        let unstyled_term = write_dictionary(&root.0, "unstyled-folder", 1, 0);
+        set_dictionary_title_and_styles(&unstyled_term, "Unstyled Term Dictionary", "");
+
+        let frequency =
+            write_dictionary_with_counts(&root.0, "frequency-folder", 0, &[("freq", 1)], 0);
+        set_dictionary_title_and_styles(
+            &frequency,
+            "Frequency Dictionary",
+            ".frequency { color: blue; }",
+        );
+
+        let disabled_term = write_dictionary(&root.0, "disabled-folder", 1, 0);
+        set_dictionary_title_and_styles(
+            &disabled_term,
+            "Disabled Term Dictionary",
+            ".disabled { color: gray; }",
+        );
+
+        fs::write(
+            root.0.join(MANIFEST_FILE_NAME),
+            r#"{"version":1,"dictionaries":[{"id":"term","path":"term-folder"},{"id":"unstyled","path":"unstyled-folder"},{"id":"frequency","path":"frequency-folder"},{"id":"disabled","path":"disabled-folder","enabled":false}]}"#,
+        )
+        .expect("write manifest");
+
+        let dictionaries = load_dictionary_specs(&root.0).expect("load dictionary specs");
+        assert_eq!(dictionaries.len(), 3);
+        assert_eq!(
+            collect_dictionary_styles(&dictionaries),
+            vec![DictionaryStyle {
+                dictionary: "Canonical Term Dictionary".into(),
+                css: ".gloss-sc-span { color: red; }".into(),
+            }]
+        );
+        assert_eq!(
+            serde_json::to_value(collect_dictionary_styles(&dictionaries))
+                .expect("serialize dictionary styles"),
+            serde_json::json!([{
+                "dictionary": "Canonical Term Dictionary",
+                "css": ".gloss-sc-span { color: red; }",
+            }])
         );
     }
 
