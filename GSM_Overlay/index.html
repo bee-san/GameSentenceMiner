@@ -25,6 +25,11 @@
     configuredHoshidictsHideDelay >= 0 &&
     configuredHoshidictsHideDelay <= 5000
   ) ? configuredHoshidictsHideDelay : 300;
+  window.gsmHoshidictsShowLookupCounts = !(
+    typeof process !== 'undefined' &&
+    process.env &&
+    process.env.GSM_HOSHIDICTS_SHOW_LOOKUP_COUNTS === '0'
+  );
   if (window.gsmHoshidictsReaderEnabled) {
     document.documentElement.classList.add('gsm-hoshidicts-enabled');
     document.documentElement.dataset.gsmHoshidictsEnabled = 'true';
@@ -5042,6 +5047,7 @@ background: rgba(202, 12, 12, 0.692);
       serverUrl: `ws://127.0.0.1:${serverPort}`,
       lookupMode: window.gsmHoshidictsLookupMode === 'hover' ? 'hover' : 'shift',
       popupHideDelayMs: window.gsmHoshidictsPopupHideDelayMs,
+      showLookupCounts: window.gsmHoshidictsShowLookupCounts,
       onPopupStateChange: handleHoshidictsPopupState,
       async getMiningStatus() {
         return await miningClient.getStatus();
@@ -5071,6 +5077,7 @@ background: rgba(202, 12, 12, 0.692);
     window.gsmHoshidictsPopupHideDelayMs = (
       Number.isInteger(hideDelay) && hideDelay >= 0 && hideDelay <= 5000
     ) ? hideDelay : 300;
+    window.gsmHoshidictsShowLookupCounts = preferences.showLookupCounts !== false;
     if (
       window.gsmHoshidictsReader &&
       typeof window.gsmHoshidictsReader.updatePreferences === 'function'
@@ -5078,6 +5085,7 @@ background: rgba(202, 12, 12, 0.692);
       window.gsmHoshidictsReader.updatePreferences({
         lookupMode: window.gsmHoshidictsLookupMode,
         popupHideDelayMs: window.gsmHoshidictsPopupHideDelayMs,
+        showLookupCounts: window.gsmHoshidictsShowLookupCounts,
       });
     }
   });

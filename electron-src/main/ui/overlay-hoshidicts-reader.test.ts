@@ -46,7 +46,11 @@ function loadReaderModule(window: Window) {
   return readerModule.exports;
 }
 
-function runOverlayFeatureBootstrap(enabled: boolean, lookupMode?: string) {
+function runOverlayFeatureBootstrap(
+  enabled: boolean,
+  lookupMode?: string,
+  showLookupCounts?: string
+) {
   const html = fs.readFileSync(
     path.resolve(process.cwd(), "GSM_Overlay/index.html"),
     "utf8"
@@ -68,7 +72,8 @@ function runOverlayFeatureBootstrap(enabled: boolean, lookupMode?: string) {
     process: {
       env: {
         GSM_HOSHIDICTS_ENABLED: enabled ? "1" : "0",
-        GSM_HOSHIDICTS_LOOKUP_MODE: lookupMode
+        GSM_HOSHIDICTS_LOOKUP_MODE: lookupMode,
+        GSM_HOSHIDICTS_SHOW_LOOKUP_COUNTS: showLookupCounts
       }
     },
     window
@@ -76,7 +81,10 @@ function runOverlayFeatureBootstrap(enabled: boolean, lookupMode?: string) {
   return { addClass, documentElement, window };
 }
 
-function runHoshidictsReaderConfiguration(lookupMode: string) {
+function runHoshidictsReaderConfiguration(
+  lookupMode: string,
+  showLookupCounts = true
+) {
   const html = fs.readFileSync(
     path.resolve(process.cwd(), "GSM_Overlay/index.html"),
     "utf8"
@@ -88,13 +96,16 @@ function runHoshidictsReaderConfiguration(lookupMode: string) {
     throw new Error("Unable to find the Hoshidicts reader configuration script");
   }
 
-  const createHoshidictsReader = vi.fn(() => ({}));
+  const updatePreferences = vi.fn();
+  const createHoshidictsReader = vi.fn(() => ({ updatePreferences }));
   const recordLookup = vi.fn();
   const createHoshidictsLookupStatsClient = vi.fn(() => ({
     record: recordLookup
   }));
   const window = {
     gsmHoshidictsLookupMode: lookupMode,
+    gsmHoshidictsPopupHideDelayMs: 300,
+    gsmHoshidictsShowLookupCounts: showLookupCounts,
     gsmHoshidictsReaderEnabled: true,
     GSMHoshidictsReader: {
       createHoshidictsMiningClient: vi.fn(() => ({
@@ -106,9 +117,10 @@ function runHoshidictsReaderConfiguration(lookupMode: string) {
       resolveGsmApiBaseUrl: vi.fn(() => "http://127.0.0.1:7275")
     }
   } as Record<string, any>;
+  const ipcOn = vi.fn();
   const context = {
     console,
-    ipcRenderer: { on: vi.fn() },
+    ipcRenderer: { on: ipcOn },
     window
   } as Record<string, any>;
   vm.runInNewContext(script, context, {
@@ -119,7 +131,9 @@ function runHoshidictsReaderConfiguration(lookupMode: string) {
   return {
     createHoshidictsLookupStatsClient,
     createHoshidictsReader,
+    ipcOn,
     recordLookup,
+    updatePreferences,
     window
   };
 }
@@ -320,6 +334,16 @@ async function flushPromises() {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -352,13 +376,25 @@ describe("Hoshidicts safe popup rendering", () => {
     const enabled = runOverlayFeatureBootstrap(true);
     expect(enabled.window.gsmHoshidictsReaderEnabled).toBe(true);
     expect(enabled.window.gsmHoshidictsLookupMode).toBe("shift");
+    expect(enabled.window.gsmHoshidictsShowLookupCounts).toBe(true);
     expect(enabled.addClass).toHaveBeenCalledWith("gsm-hoshidicts-enabled");
     expect(enabled.documentElement.dataset.gsmHoshidictsEnabled).toBe("true");
 
     const disabled = runOverlayFeatureBootstrap(false);
     expect(disabled.window.gsmHoshidictsReaderEnabled).toBe(false);
+    expect(disabled.window.gsmHoshidictsShowLookupCounts).toBe(true);
     expect(disabled.addClass).not.toHaveBeenCalled();
     expect(disabled.documentElement.dataset.gsmHoshidictsEnabled).toBeUndefined();
+  });
+
+  it("defaults lookup counts on and accepts an explicit launch disable", () => {
+    expect(
+      runOverlayFeatureBootstrap(true).window.gsmHoshidictsShowLookupCounts
+    ).toBe(true);
+    expect(
+      runOverlayFeatureBootstrap(true, "hover", "0").window
+        .gsmHoshidictsShowLookupCounts
+    ).toBe(false);
   });
 
   it("normalizes and passes the configured Hoshidicts lookup mode", () => {
@@ -371,7 +407,10 @@ describe("Hoshidicts safe popup rendering", () => {
 
     const configured = runHoshidictsReaderConfiguration("hover");
     expect(configured.createHoshidictsReader).toHaveBeenCalledWith(
-      expect.objectContaining({ lookupMode: "hover" })
+      expect.objectContaining({
+        lookupMode: "hover",
+        showLookupCounts: true
+      })
     );
     expect(configured.createHoshidictsLookupStatsClient).toHaveBeenCalledWith({
       baseUrl: "http://127.0.0.1:7275"
@@ -381,6 +420,25 @@ describe("Hoshidicts safe popup rendering", () => {
     expect(configured.recordLookup).toHaveBeenCalledWith({
       term: "食べる",
       reading: "たべる"
+    });
+
+    const disabled = runHoshidictsReaderConfiguration("hover", false);
+    expect(disabled.createHoshidictsReader).toHaveBeenCalledWith(
+      expect.objectContaining({ showLookupCounts: false })
+    );
+
+    const preferenceHandler = disabled.ipcOn.mock.calls.find(
+      ([channel]) => channel === "hoshidicts-reader-preferences"
+    )?.[1];
+    preferenceHandler?.({}, {
+      lookupMode: "shift",
+      popupHideDelayMs: 400,
+      showLookupCounts: true
+    });
+    expect(disabled.updatePreferences).toHaveBeenCalledWith({
+      lookupMode: "shift",
+      popupHideDelayMs: 400,
+      showLookupCounts: true
     });
   });
 
@@ -567,6 +625,296 @@ describe("Hoshidicts Shift-hover scanner", () => {
       term: "食べる",
       reading: "たべる"
     });
+    reader.destroy();
+  });
+
+  it("does not record or mount lookup counts when the preference is disabled", async () => {
+    vi.useFakeTimers();
+    const dom = createDom();
+    const api = loadReaderModule(dom.window as unknown as Window);
+    const first = dom.window.document.getElementById("first")!;
+    setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+    const onLookup = vi.fn();
+    const reader = api.createHoshidictsReader({
+      window: dom.window,
+      document: dom.window.document,
+      WebSocket: FakeWebSocket,
+      lookupMode: "hover",
+      showLookupCounts: false,
+      onLookup,
+      logger: { debug() {}, info() {}, warn() {} }
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    first.dispatchEvent(
+      new dom.window.MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 11,
+        clientY: 11
+      })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    const request = JSON.parse(socket.sent.at(-1)!);
+    socket.receive(lookupResult(request.requestId, "食べる"));
+    await flushPromises();
+
+    expect(onLookup).not.toHaveBeenCalled();
+    expect(
+      reader.getPopupElement().querySelector(".gsm-hoshidicts-lookup-stats")
+    ).toBeNull();
+    reader.destroy();
+  });
+
+  it("cancels queued lookup recording when disabled before the callback starts", async () => {
+    vi.useFakeTimers();
+    const dom = createDom();
+    const api = loadReaderModule(dom.window as unknown as Window);
+    const first = dom.window.document.getElementById("first")!;
+    setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+    const onLookup = vi.fn();
+    const reader = api.createHoshidictsReader({
+      window: dom.window,
+      document: dom.window.document,
+      WebSocket: FakeWebSocket,
+      lookupMode: "hover",
+      onLookup,
+      logger: { debug() {}, info() {}, warn() {} }
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    first.dispatchEvent(
+      new dom.window.MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 11,
+        clientY: 11
+      })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    const request = JSON.parse(socket.sent.at(-1)!);
+    socket.receive(lookupResult(request.requestId, "食べる"));
+    reader.updatePreferences({ showLookupCounts: false });
+    await flushPromises();
+
+    expect(onLookup).not.toHaveBeenCalled();
+    expect(
+      reader.getPopupElement().querySelector(".gsm-hoshidicts-lookup-stats")
+    ).toBeNull();
+    reader.destroy();
+  });
+
+  it("removes lookup counts and suppresses an in-flight response when disabled live", async () => {
+    vi.useFakeTimers();
+    const dom = createDom();
+    const api = loadReaderModule(dom.window as unknown as Window);
+    const first = dom.window.document.getElementById("first")!;
+    setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+    const lookupStats = deferred<Record<string, unknown>>();
+    const onLookup = vi.fn(() => lookupStats.promise);
+    const reader = api.createHoshidictsReader({
+      window: dom.window,
+      document: dom.window.document,
+      WebSocket: FakeWebSocket,
+      lookupMode: "hover",
+      onLookup,
+      logger: { debug() {}, info() {}, warn() {} }
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    first.dispatchEvent(
+      new dom.window.MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 11,
+        clientY: 11
+      })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    const request = JSON.parse(socket.sent.at(-1)!);
+    socket.receive(lookupResult(request.requestId, "食べる"));
+    await flushPromises();
+    expect(onLookup).toHaveBeenCalledTimes(1);
+    expect(
+      reader.getPopupElement().querySelector(".gsm-hoshidicts-lookup-stats")
+    ).not.toBeNull();
+
+    reader.updatePreferences({ showLookupCounts: false });
+    expect(
+      reader.getPopupElement().querySelector(".gsm-hoshidicts-lookup-stats")
+    ).toBeNull();
+    lookupStats.resolve({ success: true, seenCount: 8, lookupCount: 3 });
+    await flushPromises();
+    expect(reader.getPopupElement().textContent).not.toContain("Seen 8 times");
+    reader.destroy();
+  });
+
+  it("renders first-result lookup counts after the popup without blocking it", async () => {
+    vi.useFakeTimers();
+    const dom = createDom();
+    const api = loadReaderModule(dom.window as unknown as Window);
+    const first = dom.window.document.getElementById("first")!;
+    setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+    const lookupStats = deferred<Record<string, unknown>>();
+    const onLookup = vi.fn(() => lookupStats.promise);
+    const reader = api.createHoshidictsReader({
+      window: dom.window,
+      document: dom.window.document,
+      WebSocket: FakeWebSocket,
+      lookupMode: "hover",
+      onLookup,
+      logger: { debug() {}, info() {}, warn() {} }
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    first.dispatchEvent(
+      new dom.window.MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 11,
+        clientY: 11
+      })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    const request = JSON.parse(socket.sent.at(-1)!);
+    const response = lookupResult(request.requestId, "食べる");
+    response.results.push({
+      ...response.results[0],
+      term: {
+        ...response.results[0].term,
+        expression: "食う",
+        reading: "くう"
+      }
+    });
+
+    socket.receive(response);
+
+    const popup = reader.getPopupElement();
+    const entries = popup.querySelectorAll(".gsm-hoshidicts-entry");
+    expect(reader.isVisible()).toBe(true);
+    expect(popup.textContent).toContain("to eat");
+    expect(entries).toHaveLength(2);
+    expect(entries[0].querySelector(".gsm-hoshidicts-lookup-stats")?.hidden).toBe(
+      true
+    );
+    expect(entries[1].querySelector(".gsm-hoshidicts-lookup-stats")).toBeNull();
+
+    lookupStats.resolve({ success: true, seenCount: 38, lookupCount: 5 });
+    await flushPromises();
+
+    const countLine = entries[0].querySelector<HTMLElement>(
+      ".gsm-hoshidicts-lookup-stats"
+    );
+    expect(countLine?.hidden).toBe(false);
+    expect(countLine?.textContent).toBe("Seen 38 times · Looked up 5 times");
+    expect(onLookup).toHaveBeenCalledTimes(1);
+    reader.destroy();
+  });
+
+  it.each([
+    [1, 1, "Seen 1 time · Looked up 1 time", false],
+    [0, 0, "Seen 0 times · Looked up 0 times", false],
+    [null, 5, "Looked up 5 times", false],
+    [1, null, "Seen 1 time", false],
+    [null, null, "", true]
+  ])(
+    "formats seen=%s and lookup=%s counts without empty segments",
+    async (seenCount, lookupCount, expectedText, expectedHidden) => {
+      vi.useFakeTimers();
+      const dom = createDom();
+      const api = loadReaderModule(dom.window as unknown as Window);
+      const first = dom.window.document.getElementById("first")!;
+      setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+      const reader = api.createHoshidictsReader({
+        window: dom.window,
+        document: dom.window.document,
+        WebSocket: FakeWebSocket,
+        lookupMode: "hover",
+        onLookup: async () => ({ success: true, seenCount, lookupCount }),
+        logger: { debug() {}, info() {}, warn() {} }
+      });
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      first.dispatchEvent(
+        new dom.window.MouseEvent("mousemove", {
+          bubbles: true,
+          clientX: 11,
+          clientY: 11
+        })
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      const request = JSON.parse(socket.sent.at(-1)!);
+      socket.receive(lookupResult(request.requestId, "食べる"));
+      await flushPromises();
+
+      const countLine = reader
+        .getPopupElement()
+        .querySelector<HTMLElement>(".gsm-hoshidicts-lookup-stats");
+      expect(countLine?.hidden).toBe(expectedHidden);
+      expect(countLine?.textContent).toBe(expectedText);
+      reader.destroy();
+    }
+  );
+
+  it("ignores lookup counts that resolve after a newer popup renders", async () => {
+    vi.useFakeTimers();
+    const dom = createDom();
+    const api = loadReaderModule(dom.window as unknown as Window);
+    const first = dom.window.document.getElementById("first")!;
+    const second = dom.window.document.getElementById("second")!;
+    setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+    setRect(second, { left: 30, top: 10, right: 90, bottom: 30 });
+    const firstStats = deferred<Record<string, unknown>>();
+    const secondStats = deferred<Record<string, unknown>>();
+    const onLookup = vi
+      .fn()
+      .mockImplementationOnce(() => firstStats.promise)
+      .mockImplementationOnce(() => secondStats.promise);
+    const reader = api.createHoshidictsReader({
+      window: dom.window,
+      document: dom.window.document,
+      WebSocket: FakeWebSocket,
+      lookupMode: "hover",
+      onLookup,
+      logger: { debug() {}, info() {}, warn() {} }
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+
+    first.dispatchEvent(
+      new dom.window.MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 11,
+        clientY: 11
+      })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    const firstRequest = JSON.parse(socket.sent.at(-1)!);
+    socket.receive(lookupResult(firstRequest.requestId, "食べる"));
+
+    second.dispatchEvent(
+      new dom.window.MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 31,
+        clientY: 11
+      })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    const secondRequest = JSON.parse(socket.sent.at(-1)!);
+    socket.receive(lookupResult(secondRequest.requestId, "べる", "new result"));
+
+    firstStats.resolve({ success: true, seenCount: 99, lookupCount: 99 });
+    await flushPromises();
+
+    const countLine = reader
+      .getPopupElement()
+      .querySelector<HTMLElement>(".gsm-hoshidicts-lookup-stats");
+    expect(reader.getPopupElement().textContent).toContain("new result");
+    expect(countLine?.hidden).toBe(true);
+    expect(countLine?.textContent).toBe("");
+
+    secondStats.resolve({ success: true, seenCount: 2, lookupCount: 3 });
+    await flushPromises();
+
+    expect(countLine?.hidden).toBe(false);
+    expect(countLine?.textContent).toBe("Seen 2 times · Looked up 3 times");
+    expect(onLookup).toHaveBeenCalledTimes(2);
     reader.destroy();
   });
 
@@ -1126,14 +1474,20 @@ describe("Hoshidicts Shift-hover scanner", () => {
 
     expect(reader.getPreferences()).toEqual({
       lookupMode: "shift",
-      popupHideDelayMs: 300
+      popupHideDelayMs: 300,
+      showLookupCounts: true
     });
     expect(
       reader.updatePreferences({ lookupMode: "hover", popupHideDelayMs: 9000 })
-    ).toEqual({ lookupMode: "hover", popupHideDelayMs: 5000 });
+    ).toEqual({
+      lookupMode: "hover",
+      popupHideDelayMs: 5000,
+      showLookupCounts: true
+    });
     expect(reader.updatePreferences({ popupHideDelayMs: -20 })).toEqual({
       lookupMode: "hover",
-      popupHideDelayMs: 0
+      popupHideDelayMs: 0,
+      showLookupCounts: true
     });
     reader.destroy();
   });

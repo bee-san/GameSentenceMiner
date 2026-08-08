@@ -10,10 +10,15 @@ const harness = vi.hoisted(() => ({
     registerIPC: vi.fn(),
     configureLookupModeProvider: vi.fn(),
     configurePopupHideDelayProvider: vi.fn(),
+    configureShowLookupCountsProvider: vi.fn(),
     markPreferencesApplied: vi.fn(() => true),
     busRequest: vi.fn(async () => ({ applied: true })),
     startManager: vi.fn(async () => undefined),
-    managerSnapshot: { lookupMode: 'hover', popupHideDelayMs: 850 },
+    managerSnapshot: {
+        lookupMode: 'hover',
+        popupHideDelayMs: 850,
+        showLookupCounts: false,
+    },
 }));
 
 vi.mock('../../runtime/bus_client.js', () => ({
@@ -42,9 +47,12 @@ vi.mock('../../ui/front.js', () => ({
     configureHoshidictsLookupModeProvider: harness.configureLookupModeProvider,
     configureHoshidictsPopupHideDelayProvider:
         harness.configurePopupHideDelayProvider,
+    configureHoshidictsShowLookupCountsProvider:
+        harness.configureShowLookupCountsProvider,
     getOverlayHoshidictsEnabledAtLaunch: () => false,
     getOverlayHoshidictsLookupModeAtLaunch: () => 'shift',
     getOverlayHoshidictsPopupHideDelayAtLaunch: () => 300,
+    getOverlayHoshidictsShowLookupCountsAtLaunch: () => true,
     getOverlayRuntimeState: () => ({
         isRunning: false,
         source: null,
@@ -79,6 +87,7 @@ describe('Hoshidicts feature registration', () => {
         harness.busHandler = null;
         harness.configureLookupModeProvider.mockReset();
         harness.configurePopupHideDelayProvider.mockReset();
+        harness.configureShowLookupCountsProvider.mockReset();
         harness.startManager.mockClear();
     });
 
@@ -106,21 +115,31 @@ describe('Hoshidicts feature registration', () => {
         expect(
             harness.registerIPC.mock.calls[0][0].getOverlayLookupModeAtLaunch()
         ).toBe('shift');
+        expect(
+            harness.registerIPC.mock.calls[0][0]
+                .getOverlayShowLookupCountsAtLaunch()
+        ).toBe(true);
         await expect(
             harness.registerIPC.mock.calls[0][0].applyReaderPreferences({
                 lookupMode: 'hover',
                 popupHideDelayMs: 850,
+                showLookupCounts: false,
             })
         ).resolves.toBe(true);
         expect(harness.busRequest).toHaveBeenCalledWith(
             'overlay.hoshidicts-reader',
             'hoshidicts.readerPreferences',
-            { lookupMode: 'hover', popupHideDelayMs: 850 },
+            {
+                lookupMode: 'hover',
+                popupHideDelayMs: 850,
+                showLookupCounts: false,
+            },
             2000
         );
         expect(harness.markPreferencesApplied).toHaveBeenCalledWith({
             lookupMode: 'hover',
             popupHideDelayMs: 850,
+            showLookupCounts: false,
         });
         expect(harness.busHandler).not.toBeNull();
 
@@ -135,7 +154,7 @@ describe('Hoshidicts feature registration', () => {
         expect(harness.openWindow).toHaveBeenCalledOnce();
     });
 
-    it('wires the persisted lookup mode into overlay launches after startup', async () => {
+    it('wires persisted reader preferences into overlay launches after startup', async () => {
         const { startHoshidictsManager } = await import('./index.js');
 
         await startHoshidictsManager();
@@ -150,6 +169,12 @@ describe('Hoshidicts feature registration', () => {
         const delayProvider =
             harness.configurePopupHideDelayProvider.mock.calls[0][0];
         await expect(delayProvider()).resolves.toBe(850);
+        expect(
+            harness.configureShowLookupCountsProvider
+        ).toHaveBeenCalledOnce();
+        const showLookupCountsProvider =
+            harness.configureShowLookupCountsProvider.mock.calls[0][0];
+        await expect(showLookupCountsProvider()).resolves.toBe(false);
     });
 
     it('keeps local settings IPC available if the desktop bus failed to start', async () => {

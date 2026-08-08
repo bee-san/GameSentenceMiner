@@ -50,10 +50,13 @@ let overlayLaunchSource: OverlayLaunchSource | null = null;
 let overlayHoshidictsEnabledAtLaunch: boolean | null = null;
 let overlayHoshidictsLookupModeAtLaunch: HoshidictsLookupMode | null = null;
 let overlayHoshidictsPopupHideDelayAtLaunch: number | null = null;
+let overlayHoshidictsShowLookupCountsAtLaunch: boolean | null = null;
 let hoshidictsLookupModeProvider: () => Promise<HoshidictsLookupMode> =
     async () => 'shift';
 let hoshidictsPopupHideDelayProvider: () => Promise<number> =
     async () => DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS;
+let hoshidictsShowLookupCountsProvider: () => Promise<boolean> =
+    async () => true;
 
 export interface OverlayRuntimeState {
     isRunning: boolean;
@@ -70,6 +73,12 @@ export function configureHoshidictsPopupHideDelayProvider(
     provider: () => Promise<number>
 ): void {
     hoshidictsPopupHideDelayProvider = provider;
+}
+
+export function configureHoshidictsShowLookupCountsProvider(
+    provider: () => Promise<boolean>
+): void {
+    hoshidictsShowLookupCountsProvider = provider;
 }
 
 interface StopOverlayOptions {
@@ -178,6 +187,7 @@ export function getOverlayRuntimeState(): OverlayRuntimeState {
         overlayHoshidictsEnabledAtLaunch = null;
         overlayHoshidictsLookupModeAtLaunch = null;
         overlayHoshidictsPopupHideDelayAtLaunch = null;
+        overlayHoshidictsShowLookupCountsAtLaunch = null;
     }
     return {
         isRunning,
@@ -200,6 +210,11 @@ export function getOverlayHoshidictsPopupHideDelayAtLaunch(): number | null {
     return overlayHoshidictsPopupHideDelayAtLaunch;
 }
 
+export function getOverlayHoshidictsShowLookupCountsAtLaunch(): boolean | null {
+    getOverlayRuntimeState();
+    return overlayHoshidictsShowLookupCountsAtLaunch;
+}
+
 export function markOverlayHoshidictsReaderPreferencesApplied(
     preferences: HoshidictsReaderPreferences
 ): boolean {
@@ -208,6 +223,7 @@ export function markOverlayHoshidictsReaderPreferencesApplied(
     }
     overlayHoshidictsLookupModeAtLaunch = preferences.lookupMode;
     overlayHoshidictsPopupHideDelayAtLaunch = preferences.popupHideDelayMs;
+    overlayHoshidictsShowLookupCountsAtLaunch = preferences.showLookupCounts;
     return true;
 }
 
@@ -226,6 +242,7 @@ export function stopOverlay(options: StopOverlayOptions = {}): boolean {
             overlayHoshidictsEnabledAtLaunch = null;
             overlayHoshidictsLookupModeAtLaunch = null;
             overlayHoshidictsPopupHideDelayAtLaunch = null;
+            overlayHoshidictsShowLookupCountsAtLaunch = null;
         }
         return stopRequested;
     }
@@ -236,6 +253,7 @@ export function stopOverlay(options: StopOverlayOptions = {}): boolean {
         overlayHoshidictsEnabledAtLaunch = null;
         overlayHoshidictsLookupModeAtLaunch = null;
         overlayHoshidictsPopupHideDelayAtLaunch = null;
+        overlayHoshidictsShowLookupCountsAtLaunch = null;
         return false;
     }
 
@@ -314,19 +332,22 @@ function registerOverlayProcess(
     source: OverlayLaunchSource,
     hoshidictsEnabled: boolean,
     hoshidictsLookupMode: HoshidictsLookupMode,
-    hoshidictsPopupHideDelayMs: number
+    hoshidictsPopupHideDelayMs: number,
+    hoshidictsShowLookupCounts: boolean
 ): void {
     overlayProcess = processHandle;
     overlayLaunchSource = source;
     overlayHoshidictsEnabledAtLaunch = hoshidictsEnabled;
     overlayHoshidictsLookupModeAtLaunch = hoshidictsLookupMode;
     overlayHoshidictsPopupHideDelayAtLaunch = hoshidictsPopupHideDelayMs;
+    overlayHoshidictsShowLookupCountsAtLaunch = hoshidictsShowLookupCounts;
     overlayProcess.once('exit', () => {
         overlayProcess = null;
         overlayLaunchSource = null;
         overlayHoshidictsEnabledAtLaunch = null;
         overlayHoshidictsLookupModeAtLaunch = null;
         overlayHoshidictsPopupHideDelayAtLaunch = null;
+        overlayHoshidictsShowLookupCountsAtLaunch = null;
     });
     overlayProcess.once('error', (error: Error) => {
         console.error('Overlay process error:', error);
@@ -335,18 +356,21 @@ function registerOverlayProcess(
         overlayHoshidictsEnabledAtLaunch = null;
         overlayHoshidictsLookupModeAtLaunch = null;
         overlayHoshidictsPopupHideDelayAtLaunch = null;
+        overlayHoshidictsShowLookupCountsAtLaunch = null;
     });
 }
 
 export function buildHoshidictsOverlayEnvironment(
     enabled: boolean,
     lookupMode: HoshidictsLookupMode = 'shift',
-    popupHideDelayMs = DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS
+    popupHideDelayMs = DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS,
+    showLookupCounts = true
 ): Record<string, string> {
     return {
         GSM_HOSHIDICTS_ENABLED: enabled ? '1' : '0',
         GSM_HOSHIDICTS_LOOKUP_MODE: lookupMode,
         GSM_HOSHIDICTS_POPUP_HIDE_DELAY_MS: String(popupHideDelayMs),
+        GSM_HOSHIDICTS_SHOW_LOOKUP_COUNTS: showLookupCounts ? '1' : '0',
     };
 }
 
@@ -426,6 +450,7 @@ export async function runOverlayWithSource(
     const hoshidictsEnabled = getConfiguredHoshidictsEnabled();
     let hoshidictsLookupMode: HoshidictsLookupMode = 'shift';
     let hoshidictsPopupHideDelayMs = DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS;
+    let hoshidictsShowLookupCounts = true;
     if (hoshidictsEnabled) {
         try {
             hoshidictsLookupMode =
@@ -439,6 +464,8 @@ export async function runOverlayWithSource(
                 configuredHideDelay <= MAX_HOSHIDICTS_POPUP_HIDE_DELAY_MS
                     ? configuredHideDelay
                     : DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS;
+            hoshidictsShowLookupCounts =
+                (await hoshidictsShowLookupCountsProvider()) !== false;
         } catch (error) {
             console.warn(
                 '[Hoshidicts] Could not load lookup mode; using Shift lookup.',
@@ -449,7 +476,8 @@ export async function runOverlayWithSource(
     const hoshidictsEnvironment = buildHoshidictsOverlayEnvironment(
         hoshidictsEnabled,
         hoshidictsLookupMode,
-        hoshidictsPopupHideDelayMs
+        hoshidictsPopupHideDelayMs,
+        hoshidictsShowLookupCounts
     );
     const desktopBusEnvironment = buildOverlayDesktopBusEnvironment();
     if (USE_IN_PROCESS_OVERLAY) {
@@ -472,6 +500,9 @@ export async function runOverlayWithSource(
             : null;
         overlayHoshidictsPopupHideDelayAtLaunch = started
             ? hoshidictsPopupHideDelayMs
+            : null;
+        overlayHoshidictsShowLookupCountsAtLaunch = started
+            ? hoshidictsShowLookupCounts
             : null;
         return started;
     }
@@ -518,7 +549,8 @@ export async function runOverlayWithSource(
             source,
             hoshidictsEnabled,
             hoshidictsLookupMode,
-            hoshidictsPopupHideDelayMs
+            hoshidictsPopupHideDelayMs,
+            hoshidictsShowLookupCounts
         );
         console.log('Overlay launched successfully from source.');
         return true;
@@ -539,7 +571,8 @@ export async function runOverlayWithSource(
                 source,
                 hoshidictsEnabled,
                 hoshidictsLookupMode,
-                hoshidictsPopupHideDelayMs
+                hoshidictsPopupHideDelayMs,
+                hoshidictsShowLookupCounts
             );
             console.log('Overlay launched successfully with shared Electron runtime.');
             return true;
@@ -568,7 +601,8 @@ export async function runOverlayWithSource(
                 source,
                 hoshidictsEnabled,
                 hoshidictsLookupMode,
-                hoshidictsPopupHideDelayMs
+                hoshidictsPopupHideDelayMs,
+                hoshidictsShowLookupCounts
             );
             console.log('Overlay launched successfully with legacy standalone runtime.');
             return true;

@@ -60,6 +60,7 @@ interface PersistedManifest {
     version: 1;
     lookupMode: HoshidictsLookupMode;
     popupHideDelayMs: number;
+    showLookupCounts: boolean;
     schedule: HoshidictsSchedule;
     lastCheck: string | null;
     nextCheck: string | null;
@@ -171,6 +172,7 @@ function emptyManifest(): PersistedManifest {
         version: MANIFEST_VERSION,
         lookupMode: 'shift',
         popupHideDelayMs: DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS,
+        showLookupCounts: true,
         schedule: 'off',
         lastCheck: null,
         nextCheck: null,
@@ -1102,13 +1104,15 @@ export class HoshidictsManager {
         const snapshot = await this.getSnapshot();
         return await this.setReaderPreferences(
             lookupMode,
-            snapshot.popupHideDelayMs
+            snapshot.popupHideDelayMs,
+            snapshot.showLookupCounts
         );
     }
 
     async setReaderPreferences(
         lookupMode: HoshidictsLookupMode,
-        popupHideDelayMs: number
+        popupHideDelayMs: number,
+        showLookupCounts: boolean
     ): Promise<HoshidictsManagerSnapshot> {
         if (lookupMode !== 'shift' && lookupMode !== 'hover') {
             throw new Error('Hoshidicts lookup mode is invalid.');
@@ -1120,16 +1124,21 @@ export class HoshidictsManager {
         ) {
             throw new Error('Hoshidicts popup hide delay is invalid.');
         }
+        if (typeof showLookupCounts !== 'boolean') {
+            throw new Error('Hoshidicts lookup count preference is invalid.');
+        }
         await this.enqueue('saving', async () => {
             const manifest = await this.readManifest();
             if (
                 manifest.lookupMode !== lookupMode ||
-                manifest.popupHideDelayMs !== popupHideDelayMs
+                manifest.popupHideDelayMs !== popupHideDelayMs ||
+                manifest.showLookupCounts !== showLookupCounts
             ) {
                 await this.atomicWriteManifest({
                     ...manifest,
                     lookupMode,
                     popupHideDelayMs,
+                    showLookupCounts,
                 });
             }
         }, 'preferences');
@@ -1351,6 +1360,7 @@ export class HoshidictsManager {
             miningProfile,
             lookupMode: manifest.lookupMode,
             popupHideDelayMs: manifest.popupHideDelayMs,
+            showLookupCounts: manifest.showLookupCounts,
             schedule: manifest.schedule,
             lastCheck: manifest.lastCheck,
             nextCheck: manifest.nextCheck,
@@ -1443,6 +1453,7 @@ export class HoshidictsManager {
             version: MANIFEST_VERSION,
             lookupMode: parsed.lookupMode === 'hover' ? 'hover' : 'shift',
             popupHideDelayMs: normalizePopupHideDelay(parsed.popupHideDelayMs),
+            showLookupCounts: parsed.showLookupCounts !== false,
             schedule: normalizeSchedule(parsed.schedule),
             lastCheck: normalizeDate(parsed.lastCheck),
             nextCheck: normalizeDate(parsed.nextCheck),
@@ -1473,6 +1484,7 @@ export class HoshidictsManager {
             version: MANIFEST_VERSION,
             lookupMode: parsed.lookupMode === 'hover' ? 'hover' : 'shift',
             popupHideDelayMs: normalizePopupHideDelay(parsed.popupHideDelayMs),
+            showLookupCounts: parsed.showLookupCounts !== false,
             schedule: normalizeSchedule(parsed.schedule),
             lastCheck: normalizeDate(parsed.lastCheck),
             nextCheck: normalizeDate(parsed.nextCheck),

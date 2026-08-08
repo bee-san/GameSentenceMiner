@@ -10,6 +10,7 @@ const harness = vi.hoisted(() => ({
     enabledAtLaunch: false as boolean | null,
     lookupModeAtLaunch: 'shift' as 'shift' | 'hover' | null,
     popupHideDelayAtLaunch: 300 as number | null,
+    showLookupCountsAtLaunch: true as boolean | null,
     manager: {
         subscribe: vi.fn(),
         getSnapshot: vi.fn(),
@@ -76,6 +77,7 @@ const snapshot = {
     },
     lookupMode: 'shift',
     popupHideDelayMs: 300,
+    showLookupCounts: true,
     schedule: 'off',
     lastCheck: null,
     nextCheck: null,
@@ -154,6 +156,8 @@ async function registerHarness() {
         getOverlayLookupModeAtLaunch: () => harness.lookupModeAtLaunch,
         getOverlayPopupHideDelayAtLaunch: () =>
             harness.popupHideDelayAtLaunch,
+        getOverlayShowLookupCountsAtLaunch: () =>
+            harness.showLookupCountsAtLaunch,
         applyReaderPreferences,
         getMiningOptions,
         restartOverlay,
@@ -178,9 +182,10 @@ describe('Hoshidicts settings IPC', () => {
         harness.enabledAtLaunch = false;
         harness.lookupModeAtLaunch = 'shift';
         harness.popupHideDelayAtLaunch = 300;
+        harness.showLookupCountsAtLaunch = true;
     });
 
-    it('requires an overlay restart when the persisted lookup mode changed', async () => {
+    it('requires an overlay restart when persisted reader preferences changed', async () => {
         harness.enabledAtLaunch = true;
         harness.lookupModeAtLaunch = 'hover';
         const context = await registerHarness();
@@ -193,6 +198,20 @@ describe('Hoshidicts settings IPC', () => {
         });
 
         harness.lookupModeAtLaunch = 'shift';
+        await expect(
+            getState?.({ sender: context.settingsContents })
+        ).resolves.toMatchObject({
+            overlay: { running: true, restartRequired: false },
+        });
+
+        harness.showLookupCountsAtLaunch = false;
+        await expect(
+            getState?.({ sender: context.settingsContents })
+        ).resolves.toMatchObject({
+            overlay: { running: true, restartRequired: true },
+        });
+
+        harness.showLookupCountsAtLaunch = true;
         await expect(
             getState?.({ sender: context.settingsContents })
         ).resolves.toMatchObject({
@@ -320,7 +339,26 @@ describe('Hoshidicts settings IPC', () => {
         await expect(
             setReaderPreferences?.(
                 { sender: context.settingsContents },
-                { lookupMode: 'hover', popupHideDelayMs: 850 }
+                {
+                    lookupMode: 'hover',
+                    popupHideDelayMs: 850,
+                    showLookupCounts: 'yes',
+                }
+            )
+        ).resolves.toMatchObject({
+            success: false,
+            error: 'Hoshidicts reader preferences are invalid.',
+        });
+        expect(harness.manager.setReaderPreferences).not.toHaveBeenCalled();
+
+        await expect(
+            setReaderPreferences?.(
+                { sender: context.settingsContents },
+                {
+                    lookupMode: 'hover',
+                    popupHideDelayMs: 850,
+                    showLookupCounts: false,
+                }
             )
         ).resolves.toMatchObject({
             success: true,
@@ -328,11 +366,13 @@ describe('Hoshidicts settings IPC', () => {
         });
         expect(harness.manager.setReaderPreferences).toHaveBeenCalledWith(
             'hover',
-            850
+            850,
+            false
         );
         expect(context.applyReaderPreferences).toHaveBeenCalledWith({
             lookupMode: 'hover',
             popupHideDelayMs: 850,
+            showLookupCounts: false,
         });
 
         await expect(

@@ -53,6 +53,7 @@ export function DictionariesPanel({ controller }: { controller: Controller }) {
     readerSaveStatus,
     setLookupMode,
     setPopupHideDelayMs,
+    setShowLookupCounts,
     dictionaryBusy,
     preferencesBusy,
     actions
@@ -242,6 +243,24 @@ export function DictionariesPanel({ controller }: { controller: Controller }) {
             {state.dictionaries.length}
           </span>
         </div>
+
+        <label className="hoshidicts-reader-counts hoshidicts-dictionary-counts">
+          <input
+            id="hoshidicts-show-lookup-counts"
+            type="checkbox"
+            checked={readerDraft.showLookupCounts}
+            disabled={preferencesBusy}
+            onChange={(event) =>
+              setShowLookupCounts(event.currentTarget.checked)
+            }
+          />
+          <span>
+            <strong>{t("settings.hoshidicts.reader.showLookupCounts")}</strong>
+            <small>
+              {t("settings.hoshidicts.reader.showLookupCountsHint")}
+            </small>
+          </span>
+        </label>
 
         {state.dictionaries.length === 0 ? (
           <div className="hoshidicts-empty">

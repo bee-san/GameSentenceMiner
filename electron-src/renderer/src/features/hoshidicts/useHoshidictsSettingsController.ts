@@ -46,7 +46,8 @@ export function useHoshidictsSettingsController() {
 
   const initialReaderPreferences: HoshidictsReaderPreferences = {
     lookupMode: "shift",
-    popupHideDelayMs: DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS
+    popupHideDelayMs: DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS,
+    showLookupCounts: true
   };
   const [readerDraft, setReaderDraft] = useState(initialReaderPreferences);
   const readerDraftRef = useRef(initialReaderPreferences);
@@ -95,7 +96,8 @@ export function useHoshidictsSettingsController() {
       initializedRef.current = true;
       const reader = {
         lookupMode: normalized.lookupMode,
-        popupHideDelayMs: normalized.popupHideDelayMs
+        popupHideDelayMs: normalized.popupHideDelayMs,
+        showLookupCounts: normalized.showLookupCounts
       };
       const mining = profileToDraft(normalized.miningProfile);
       readerDraftRef.current = reader;
@@ -108,7 +110,8 @@ export function useHoshidictsSettingsController() {
     if (!readerDirtyRef.current && !readerSavingRef.current) {
       const reader = {
         lookupMode: normalized.lookupMode,
-        popupHideDelayMs: normalized.popupHideDelayMs
+        popupHideDelayMs: normalized.popupHideDelayMs,
+        showLookupCounts: normalized.showLookupCounts
       };
       readerDraftRef.current = reader;
       setReaderDraft(reader);
@@ -259,6 +262,13 @@ export function useHoshidictsSettingsController() {
           Math.max(0, Math.round(popupHideDelayMs))
         )
       });
+    },
+    [updateReaderPreferences]
+  );
+
+  const setShowLookupCounts = useCallback(
+    (showLookupCounts: boolean) => {
+      updateReaderPreferences({ showLookupCounts });
     },
     [updateReaderPreferences]
   );
@@ -483,6 +493,7 @@ export function useHoshidictsSettingsController() {
     readerSaveStatus,
     setLookupMode,
     setPopupHideDelayMs,
+    setShowLookupCounts,
     miningDraft,
     miningOptions,
     miningOptionsLoading,

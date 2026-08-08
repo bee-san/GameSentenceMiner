@@ -593,6 +593,8 @@
         "automaticHoverHint": "Look up Japanese text as the pointer moves over it.",
         "hideDelay": "Popup hide delay",
         "hideDelayHint": "Keeps the popup reachable when moving from the word into its definitions.",
+        "showLookupCounts": "Show seen and lookup counts",
+        "showLookupCountsHint": "Records lookups and shows seen and lookup totals in the first dictionary result.",
         "milliseconds": "ms"
       },
       "saveStatus": {

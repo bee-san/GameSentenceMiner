@@ -95,6 +95,7 @@ const DEFAULT_STATE: HoshidictsDesktopSnapshot = {
   miningProfile: DEFAULT_MINING_PROFILE,
   lookupMode: "shift",
   popupHideDelayMs: DEFAULT_HOSHIDICTS_POPUP_HIDE_DELAY_MS,
+  showLookupCounts: true,
   schedule: "off",
   lastCheck: null,
   nextCheck: null,
@@ -260,6 +261,7 @@ export function normalizeHoshidictsDesktopState(
     miningProfile: normalizeMiningProfile(candidate.miningProfile),
     lookupMode: candidate.lookupMode === "hover" ? "hover" : "shift",
     popupHideDelayMs,
+    showLookupCounts: candidate.showLookupCounts !== false,
     schedule,
     lastCheck:
       typeof candidate.lastCheck === "string" ? candidate.lastCheck : null,

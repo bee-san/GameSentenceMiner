@@ -807,6 +807,7 @@
     let preferences = {
       lookupMode: options.lookupMode === "hover" ? "hover" : "shift",
       popupHideDelayMs: normalizePopupHideDelay(options.popupHideDelayMs),
+      showLookupCounts: options.showLookupCounts !== false,
     };
     let socket = null;
     let reconnectTimer = null;
@@ -823,6 +824,7 @@
     let latestRequestId = null;
     let latestCandidate = null;
     let latestGeneration = 0;
+    let lookupStatsGeneration = 0;
     let lastCandidateSignature = "";
     let popupVisible = false;
     let popupAnchor = null;
@@ -1122,14 +1124,41 @@
       }
     }
 
-    function recordLookup(result) {
-      if (!onLookup) {
+    function recordLookup(result, lookupStats, generation) {
+      if (!onLookup || !preferences.showLookupCounts) {
         return;
       }
       const term = result.term.expression;
       const reading = result.term.reading;
+      const statsGeneration = lookupStatsGeneration;
+      let lookupInvoked = false;
       void Promise.resolve()
-        .then(() => onLookup({ term, reading }))
+        .then(() => {
+          if (
+            destroyed ||
+            statsGeneration !== lookupStatsGeneration ||
+            !preferences.showLookupCounts
+          ) {
+            return undefined;
+          }
+          lookupInvoked = true;
+          return onLookup({ term, reading });
+        })
+        .then((payload) => {
+          if (
+            !lookupInvoked ||
+            destroyed ||
+            generation !== latestGeneration ||
+            statsGeneration !== lookupStatsGeneration ||
+            !preferences.showLookupCounts ||
+            !lookupStats ||
+            !lookupStats.isConnected ||
+            !popup.contains(lookupStats)
+          ) {
+            return;
+          }
+          popupView.setLookupStats(lookupStats, payload);
+        })
         .catch((error) => {
           diagnostic("warn", "lookup.record-failed", {
             error: boundedString(
@@ -1208,9 +1237,11 @@
         hide("no-results");
         return;
       }
-      const rendered = popupView.renderResults(results, candidate);
+      const rendered = popupView.renderResults(results, candidate, {
+        showLookupCounts: preferences.showLookupCounts && Boolean(onLookup),
+      });
       showPopup(candidate);
-      recordLookup(results[0]);
+      recordLookup(results[0], rendered.lookupStats, latestGeneration);
       void refreshMiningButtons(rendered.miningButtons, rendered.feedback);
       diagnostic("info", "lookup.rendered", {
         requestId,
@@ -1459,6 +1490,7 @@
     function updatePreferences(nextPreferences = {}) {
       const hadHideTimer = hideTimer !== null;
       const previousMode = preferences.lookupMode;
+      const previousShowLookupCounts = preferences.showLookupCounts;
       preferences = {
         lookupMode: Object.prototype.hasOwnProperty.call(nextPreferences, "lookupMode")
           ? nextPreferences.lookupMode === "hover" ? "hover" : "shift"
@@ -1472,7 +1504,21 @@
               preferences.popupHideDelayMs
             )
           : preferences.popupHideDelayMs,
+        showLookupCounts: Object.prototype.hasOwnProperty.call(
+          nextPreferences,
+          "showLookupCounts"
+        )
+          ? nextPreferences.showLookupCounts !== false
+          : preferences.showLookupCounts,
       };
+      if (previousShowLookupCounts && !preferences.showLookupCounts) {
+        lookupStatsGeneration += 1;
+        const lookupStats = popup.querySelector(".gsm-hoshidicts-lookup-stats");
+        if (lookupStats) {
+          lookupStats.remove();
+          positionPopup();
+        }
+      }
       if (hadHideTimer) {
         clearHideTimer();
         scheduleHide(pendingHideReason);
@@ -1536,6 +1582,7 @@
       serverUrl,
       requiresShift: requiresShift(),
       popupHideDelayMs: preferences.popupHideDelayMs,
+      showLookupCounts: preferences.showLookupCounts,
       scanLength: LOOKUP_SCAN_LENGTH,
     });
     connect();

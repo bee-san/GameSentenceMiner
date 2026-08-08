@@ -75,6 +75,7 @@ const baseState: HoshidictsDesktopSnapshot = {
   },
   lookupMode: "shift",
   popupHideDelayMs: 300,
+  showLookupCounts: true,
   schedule: "weekly",
   lastCheck: "2026-08-06T10:00:00.000Z",
   nextCheck: "2026-08-13T10:00:00.000Z",
@@ -167,6 +168,7 @@ describe("HoshidictsSettingsWindow", () => {
           const preferences = args[0] as {
             lookupMode: "shift" | "hover";
             popupHideDelayMs: number;
+            showLookupCounts: boolean;
           };
           return {
             success: true,
@@ -381,10 +383,17 @@ describe("HoshidictsSettingsWindow", () => {
     const delay = container.querySelector<HTMLInputElement>(
       "#hoshidicts-popup-hide-delay"
     );
+    const showLookupCounts = container.querySelector<HTMLInputElement>(
+      "#hoshidicts-show-lookup-counts"
+    );
+
+    expect(showLookupCounts?.checked).toBe(true);
+    expect(container.textContent).toContain("Show seen and lookup counts");
 
     await act(async () => {
       hover?.click();
       setInputValue(delay, "850");
+      showLookupCounts?.click();
       await vi.advanceTimersByTimeAsync(450);
       await Promise.resolve();
       await Promise.resolve();
@@ -392,13 +401,33 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.setReaderPreferences,
-      { lookupMode: "hover", popupHideDelayMs: 850 }
+      {
+        lookupMode: "hover",
+        popupHideDelayMs: 850,
+        showLookupCounts: false
+      }
     );
     expect(invokeMock).not.toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.setLookupMode,
       expect.anything()
     );
     expect(container.textContent).toContain("Saved");
+  });
+
+  it("keeps lookup counts with the installed dictionaries", async () => {
+    await render();
+    const countsToggle = container.querySelector<HTMLInputElement>(
+      "#hoshidicts-show-lookup-counts"
+    );
+    const dictionaryList = container.querySelector(
+      ".hoshidicts-dictionary-list"
+    );
+
+    expect(countsToggle).not.toBeNull();
+    expect(dictionaryList).not.toBeNull();
+    expect(countsToggle?.closest(".hoshidicts-section")).toBe(
+      dictionaryList?.closest(".hoshidicts-section")
+    );
   });
 
   it("loads Anki on entry without dirtying or pinning automatic mappings", async () => {
@@ -545,19 +574,34 @@ describe("HoshidictsSettingsWindow", () => {
   });
 
   it.each([
-    ["ja", "辞書とマイニングの設定", "おすすめの辞書"],
-    ["ukr", "Налаштування словників і видобування", "Рекомендовані словники"]
-  ])("localizes the standalone window in %s", async (locale, subtitle, recommended) => {
-    await render(locale);
-    expect(container.textContent).toContain(subtitle);
-    expect(container.textContent).toContain(recommended);
-  });
+    [
+      "ja",
+      "辞書とマイニングの設定",
+      "おすすめの辞書",
+      "既出回数と検索回数を表示"
+    ],
+    [
+      "ukr",
+      "Налаштування словників і видобування",
+      "Рекомендовані словники",
+      "Показувати кількість зустрічей і пошуків"
+    ]
+  ])(
+    "localizes the standalone window in %s",
+    async (locale, subtitle, recommended, lookupCounts) => {
+      await render(locale);
+      expect(container.textContent).toContain(subtitle);
+      expect(container.textContent).toContain(recommended);
+      expect(container.textContent).toContain(lookupCounts);
+    }
+  );
 
   it("normalizes legacy snapshots without dirtying new preferences", () => {
     const normalized = normalizeHoshidictsDesktopState({
       ...baseState,
       revision: undefined,
       popupHideDelayMs: undefined,
+      showLookupCounts: undefined,
       dictionaries: [{ ...baseState.dictionaries[0], enabled: undefined }],
       miningProfile: {
         ...baseState.miningProfile,
@@ -566,6 +610,7 @@ describe("HoshidictsSettingsWindow", () => {
     });
     expect(normalized.revision).toBe(0);
     expect(normalized.popupHideDelayMs).toBe(300);
+    expect(normalized.showLookupCounts).toBe(true);
     expect(normalized.dictionaries[0].enabled).toBe(true);
     expect(normalized.miningProfile.disabledFields).toEqual([]);
   });

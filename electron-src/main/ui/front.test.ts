@@ -154,6 +154,7 @@ describe('runOverlayWithSource', () => {
                 GSM_CLIENT_ID: 'overlay',
                 GSM_HOSHIDICTS_ENABLED: '0',
                 GSM_HOSHIDICTS_LOOKUP_MODE: 'shift',
+                GSM_HOSHIDICTS_SHOW_LOOKUP_COUNTS: '1',
             }),
         });
         expect(getOverlayRuntimeState()).toEqual({
@@ -179,6 +180,7 @@ describe('runOverlayWithSource', () => {
         expect(startInProcessOverlayMock).toHaveBeenCalledTimes(1);
         expect(process.env.GSM_HOSHIDICTS_ENABLED).toBe('1');
         expect(process.env.GSM_HOSHIDICTS_LOOKUP_MODE).toBe('shift');
+        expect(process.env.GSM_HOSHIDICTS_SHOW_LOOKUP_COUNTS).toBe('1');
         expect(process.env.GSM_BROKER_PORT).toBe('4567');
         expect(process.env.GSM_BROKER_TOKEN).toBe('overlay-bus-token');
         expect(process.env.GSM_CLIENT_ID).toBe('overlay');
@@ -196,7 +198,7 @@ describe('runOverlayWithSource', () => {
         expect(waitForInProcessOverlayShutdownMock).toHaveBeenCalledTimes(1);
     });
 
-    it('launches with and records the configured Hoshidicts lookup mode', async () => {
+    it('launches with and records configured Hoshidicts reader preferences', async () => {
         isDevValue = true;
         hoshidictsEnabledValue = true;
         existsSyncMock.mockReturnValue(true);
@@ -206,6 +208,7 @@ describe('runOverlayWithSource', () => {
         const front = await loadFrontModule();
         front.configureHoshidictsLookupModeProvider(async () => 'hover');
         front.configureHoshidictsPopupHideDelayProvider(async () => 850);
+        front.configureHoshidictsShowLookupCountsProvider(async () => false);
 
         await expect(front.runOverlayWithSource('manual')).resolves.toBe(true);
 
@@ -213,17 +216,21 @@ describe('runOverlayWithSource', () => {
             GSM_HOSHIDICTS_ENABLED: '1',
             GSM_HOSHIDICTS_LOOKUP_MODE: 'hover',
             GSM_HOSHIDICTS_POPUP_HIDE_DELAY_MS: '850',
+            GSM_HOSHIDICTS_SHOW_LOOKUP_COUNTS: '0',
         });
         expect(front.getOverlayHoshidictsLookupModeAtLaunch()).toBe('hover');
         expect(front.getOverlayHoshidictsPopupHideDelayAtLaunch()).toBe(850);
+        expect(front.getOverlayHoshidictsShowLookupCountsAtLaunch()).toBe(false);
         expect(
             front.markOverlayHoshidictsReaderPreferencesApplied({
                 lookupMode: 'shift',
                 popupHideDelayMs: 1200,
+                showLookupCounts: true,
             })
         ).toBe(true);
         expect(front.getOverlayHoshidictsLookupModeAtLaunch()).toBe('shift');
         expect(front.getOverlayHoshidictsPopupHideDelayAtLaunch()).toBe(1200);
+        expect(front.getOverlayHoshidictsShowLookupCountsAtLaunch()).toBe(true);
     });
 
     it('stops the whole Windows process tree for source-launched overlays', async () => {

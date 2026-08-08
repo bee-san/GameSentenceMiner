@@ -48,25 +48,49 @@ describe("Hoshidicts desktop bridge", () => {
       delivered.push(preferences);
     });
 
-    expect(delivery.enqueue({ lookupMode: "shift", popupHideDelayMs: 300 }))
-      .toBe(false);
-    expect(delivery.enqueue({ lookupMode: "hover", popupHideDelayMs: 800 }))
-      .toBe(false);
+    expect(
+      delivery.enqueue({
+        lookupMode: "shift",
+        popupHideDelayMs: 300,
+        showLookupCounts: true,
+      })
+    ).toBe(false);
+    expect(
+      delivery.enqueue({
+        lookupMode: "hover",
+        popupHideDelayMs: 800,
+        showLookupCounts: false,
+      })
+    ).toBe(false);
     expect(delivered).toEqual([]);
 
     expect(delivery.markReady()).toBe(true);
     expect(delivered).toEqual([
-      { lookupMode: "hover", popupHideDelayMs: 800 },
+      {
+        lookupMode: "hover",
+        popupHideDelayMs: 800,
+        showLookupCounts: false,
+      },
     ]);
-    expect(delivery.enqueue({ lookupMode: "shift", popupHideDelayMs: 500 }))
-      .toBe(true);
+    expect(
+      delivery.enqueue({
+        lookupMode: "shift",
+        popupHideDelayMs: 500,
+        showLookupCounts: true,
+      })
+    ).toBe(true);
     expect(delivered.at(-1)).toEqual({
       lookupMode: "shift",
       popupHideDelayMs: 500,
+      showLookupCounts: true,
     });
 
     delivery.markNotReady();
-    delivery.enqueue({ lookupMode: "hover", popupHideDelayMs: 900 });
+    delivery.enqueue({
+      lookupMode: "hover",
+      popupHideDelayMs: 900,
+      showLookupCounts: false,
+    });
     delivery.clear();
     expect(delivery.markReady()).toBe(false);
     expect(delivered).toHaveLength(2);
@@ -155,11 +179,19 @@ describe("Hoshidicts desktop bridge", () => {
       broker.request(
         "overlay.hoshidicts-reader",
         "hoshidicts.readerPreferences",
-        { lookupMode: "hover", popupHideDelayMs: 800 }
+        {
+          lookupMode: "hover",
+          popupHideDelayMs: 800,
+          showLookupCounts: false,
+        }
       )
     ).resolves.toEqual({ applied: true });
     expect(applied).toEqual([
-      { lookupMode: "hover", popupHideDelayMs: 800 },
+      {
+        lookupMode: "hover",
+        popupHideDelayMs: 800,
+        showLookupCounts: false,
+      },
     ]);
   });
 });

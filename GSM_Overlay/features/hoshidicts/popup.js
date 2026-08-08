@@ -56,6 +56,13 @@
     }[state] || "-";
   }
 
+  function formatLookupCount(label, value) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      return null;
+    }
+    return `${label} ${value} ${value === 1 ? "time" : "times"}`;
+  }
+
   function createSourceHighlighter(windowRef, documentRef, highlightName) {
     let highlightedSourceElements = [];
 
@@ -176,6 +183,20 @@
       feedback.textContent = message;
     }
 
+    function setLookupStats(element, payload) {
+      const seen = formatLookupCount("Seen", payload && payload.seenCount);
+      const lookedUp = formatLookupCount(
+        "Looked up",
+        payload && payload.lookupCount
+      );
+      const segments = [seen, lookedUp].filter(Boolean);
+      element.textContent = segments.join(" · ");
+      element.hidden = segments.length === 0;
+      if (!element.hidden) {
+        positionPopup();
+      }
+    }
+
     function renderNotice(message) {
       clear();
       const notice = documentRef.createElement("div");
@@ -225,7 +246,7 @@
       }
     }
 
-    function renderResults(results, candidate) {
+    function renderResults(results, candidate, renderOptions = {}) {
       clear();
       const feedback = documentRef.createElement("div");
       feedback.className = "gsm-hoshidicts-mining-feedback";
@@ -234,6 +255,7 @@
       feedback.hidden = true;
       popup.appendChild(feedback);
       const miningButtons = [];
+      let lookupStats = null;
 
       results.forEach((result, resultIndex) => {
         const entry = documentRef.createElement("article");
@@ -265,6 +287,14 @@
         header.appendChild(mineButton);
         miningButtons.push(mineButton);
         entry.appendChild(header);
+
+        if (resultIndex === 0 && renderOptions.showLookupCounts === true) {
+          lookupStats = documentRef.createElement("div");
+          lookupStats.className = "gsm-hoshidicts-lookup-stats";
+          lookupStats.setAttribute("aria-live", "polite");
+          lookupStats.hidden = true;
+          entry.appendChild(lookupStats);
+        }
 
         const tagRow = documentRef.createElement("div");
         tagRow.className = "gsm-hoshidicts-tags";
@@ -355,7 +385,7 @@
         candidate,
         results[0].matched || results[0].term.expression
       );
-      return { feedback, miningButtons };
+      return { feedback, lookupStats, miningButtons };
     }
 
     return {
@@ -363,6 +393,7 @@
       renderNotice,
       renderResults,
       setFeedback,
+      setLookupStats,
     };
   }
 

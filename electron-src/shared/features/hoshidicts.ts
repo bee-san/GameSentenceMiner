@@ -54,6 +54,7 @@ export type HoshidictsMiningFieldName = keyof HoshidictsMiningFields;
 export interface HoshidictsReaderPreferences {
     lookupMode: HoshidictsLookupMode;
     popupHideDelayMs: number;
+    showLookupCounts: boolean;
 }
 
 export interface HoshidictsMiningProfile {
@@ -113,6 +114,7 @@ export interface HoshidictsManagerSnapshot {
     miningProfile: HoshidictsMiningProfile;
     lookupMode: HoshidictsLookupMode;
     popupHideDelayMs: number;
+    showLookupCounts: boolean;
     schedule: HoshidictsSchedule;
     lastCheck: string | null;
     nextCheck: string | null;
