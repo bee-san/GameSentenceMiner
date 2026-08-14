@@ -1023,6 +1023,8 @@ html[data-hoshidicts-theme="high-contrast"] .gsm-hoshidicts-source-match {
   height: var(--gsm-hoshidicts-popup-height, 420px);
   max-width: none;
   max-height: none;
+  display: flex;
+  flex-direction: column;
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-color: var(--hoshidicts-scrollbar) transparent;
@@ -1128,7 +1130,9 @@ html[data-hoshidicts-theme="girlypop"] .gsm-hoshidicts-popup {
   flex-direction: column-reverse;
   top: auto;
   bottom: -11px;
-  margin: 9px -11px -11px;
+  margin: auto -11px -11px;
+  /* margin-top: auto pushes the toolbar to the popup floor so short
+     definitions cannot leave it floating up the middle of the popup. */
   border-top: 1px solid var(--hoshidicts-border);
   border-bottom: 0;
 }

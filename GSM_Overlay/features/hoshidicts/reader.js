@@ -1475,6 +1475,7 @@
 
     let left;
     let top;
+    let placement;
     if (options.vertical) {
       const spaceRight = viewport.width - anchorRect.right - gap;
       const spaceLeft = anchorRect.left - gap;
@@ -1482,15 +1483,17 @@
         ? anchorRect.right + gap
         : anchorRect.left - gap - width;
       top = anchorRect.top;
+      placement = "beside";
     } else {
       const spaceBelow = Math.max(0, viewport.height - padding - anchorRect.bottom - gap);
       const spaceAbove = Math.max(0, anchorRect.top - gap - padding);
-      const placeBelow = spaceBelow >= height ||
-        (spaceAbove < height && spaceBelow > spaceAbove);
-      top = placeBelow
-        ? anchorRect.bottom + gap
-        : anchorRect.top - gap - height;
+      const placeAbove = spaceAbove >= height ||
+        (spaceBelow < height && spaceAbove >= spaceBelow);
+      top = placeAbove
+        ? anchorRect.top - gap - height
+        : anchorRect.bottom + gap;
       left = anchorRect.left;
+      placement = placeAbove ? "above" : "below";
     }
 
     return {
@@ -1498,6 +1501,7 @@
       top: Math.round(clamp(top, padding, viewport.height - height - padding)),
       width,
       height,
+      placement,
     };
   }
 
@@ -3386,6 +3390,17 @@
             { width: windowRef.innerWidth, height: windowRef.innerHeight },
             { vertical: level.candidate.vertical }
           );
+      // The root popup's toolbar sits opposite its automatic placement: above
+      // the word -> toolbar bottom; below the word -> toolbar top. Vertical and
+      // nested popups position beside the word, so they keep the preference.
+      // Only re-apply when it actually changes, so a no-op reposition never
+      // reorders the toolbar out from under a focused control.
+      if (level.view && (position.placement === "above" || position.placement === "below")) {
+        const desiredToolbar = position.placement === "above" ? "bottom" : "top";
+        if (level.popup.dataset.toolbarPosition !== desiredToolbar) {
+          level.view.setToolbarPosition(desiredToolbar);
+        }
+      }
       level.popup.style.left = `${position.left}px`;
       level.popup.style.top = `${position.top}px`;
       level.popup.style.width = `${position.width}px`;

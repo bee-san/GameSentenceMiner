@@ -108,6 +108,21 @@ describe("Hoshidicts safe popup rendering", () => {
     expect(readerCssRule(POPUP)).not.toMatch(/(?:^|;)\s*opacity\s*:/);
   });
 
+  it("pins a bottom toolbar to the popup floor so short definitions cannot float it up", () => {
+    // The popup is a fixed-height column, so a bottom toolbar must be pushed to
+    // the floor rather than trailing short content up the middle of the popup.
+    const popupRule = readerCssRule(POPUP) ?? "";
+    expect(popupRule).toMatch(/display\s*:\s*flex/);
+    expect(popupRule).toMatch(/flex-direction\s*:\s*column/);
+
+    const bottomChromeRule = readerCssRule(
+      '.gsm-hoshidicts-popup[data-toolbar-position="bottom"] .gsm-hoshidicts-result-chrome'
+    ) ?? "";
+    // A leading `auto` in the margin (either the longhand margin-top or the
+    // shorthand's first value) is what pushes the toolbar to the popup floor.
+    expect(bottomChromeRule).toMatch(/margin(?:-top)?\s*:\s*auto/);
+  });
+
   // reader.css owns these palettes; jsdom applies no CSS, so scraping the file
   // only restated it. What matters behaviourally is that every theme the reader
   // can select has a rule to select, which the reader test at the bottom of this
@@ -1007,12 +1022,44 @@ describe("Hoshidicts safe popup rendering", () => {
 
   it.each([
     [
+      "prefers above the word when the popup fits there",
+      { left: 100, right: 140, top: 300, bottom: 330 },
+      { width: 200, height: 150 },
+      { width: 800, height: 600 },
+      undefined,
+      { left: 100, top: 146, width: 200, height: 150, placement: "above" }
+    ],
+    [
+      "falls below the word when above cannot fit but below can",
+      { left: 100, right: 140, top: 40, bottom: 70 },
+      { width: 200, height: 150 },
+      { width: 800, height: 600 },
+      undefined,
+      { left: 100, top: 74, width: 200, height: 150, placement: "below" }
+    ],
+    [
+      "chooses the roomier side above when neither fits",
+      { left: 100, right: 140, top: 360, bottom: 380 },
+      { width: 200, height: 320 },
+      { width: 800, height: 600 },
+      undefined,
+      { left: 100, top: 36, width: 200, height: 320, placement: "above" }
+    ],
+    [
+      "chooses the roomier side below when neither fits",
+      { left: 100, right: 140, top: 200, bottom: 240 },
+      { width: 200, height: 320 },
+      { width: 800, height: 600 },
+      undefined,
+      { left: 100, top: 244, width: 200, height: 320, placement: "below" }
+    ],
+    [
       "clamps beside the anchor at the viewport edge",
       { left: 780, right: 800, top: 570, bottom: 590 },
       { width: 420, height: 300 },
       { width: 800, height: 600 },
       undefined,
-      { left: 374, top: 266, width: 420, height: 300 }
+      { left: 374, top: 266, width: 420, height: 300, placement: "above" }
     ],
     [
       "stacks vertically when asked",
@@ -1020,7 +1067,7 @@ describe("Hoshidicts safe popup rendering", () => {
       { width: 300, height: 500 },
       { width: 800, height: 600 },
       { vertical: true },
-      { left: 34, top: 20, width: 300, height: 500 }
+      { left: 34, top: 20, width: 300, height: 500, placement: "beside" }
     ],
     [
       "keeps a wide popup's size while clamping upwards",
@@ -1028,7 +1075,7 @@ describe("Hoshidicts safe popup rendering", () => {
       { width: 420, height: 80 },
       { width: 1280, height: 720 },
       undefined,
-      { left: 320, top: 566, width: 420, height: 80 }
+      { left: 320, top: 566, width: 420, height: 80, placement: "above" }
     ],
     [
       "keeps a tall popup's size while clamping upwards",
@@ -1036,7 +1083,7 @@ describe("Hoshidicts safe popup rendering", () => {
       { width: 200, height: 250 },
       { width: 500, height: 300 },
       undefined,
-      { left: 100, top: 44, width: 200, height: 250 }
+      { left: 100, top: 44, width: 200, height: 250, placement: "below" }
     ],
     [
       "shrinks to fit a viewport smaller than the preference",
@@ -1044,7 +1091,7 @@ describe("Hoshidicts safe popup rendering", () => {
       { width: 560, height: 420 },
       { width: 320, height: 240 },
       undefined,
-      { left: 6, top: 6, width: 308, height: 228 }
+      { left: 6, top: 6, width: 308, height: 228, placement: "below" }
     ]
   ])("%s", (_label, anchor, size, viewport, options, expected) => {
     const dom = createDom();
@@ -2458,8 +2505,34 @@ describe("Hoshidicts dictionary tabs", () => {
       .not.toContain("main definition");
   });
 
+  it("places the toolbar opposite the root popup's automatic placement", async () => {
+    const { first, lookup, reader } = createLookupHarness({
+      dictionaryPresentation: [{ title: "Main", favorite: true }]
+    });
+
+    // Anchor near the bottom of the viewport: the popup fits above the word,
+    // so the toolbar belongs on the bottom, opposite the anchor.
+    setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
+    const { popup } = await lookup((requestId) =>
+      lookupResultWithDictionaries(requestId, [
+        { dictionary: "Main", glossary: "above the word" }
+      ])
+    );
+    expect(popup.dataset.toolbarPosition).toBe("bottom");
+
+    // Move the anchor to the top: the popup must fall below the word, so the
+    // toolbar flips to the top when the popup repositions.
+    setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+    reader.getPopupElement().ownerDocument.defaultView!.dispatchEvent(
+      new (reader.getPopupElement().ownerDocument.defaultView as any).Event(
+        "resize"
+      )
+    );
+    expect(popup.dataset.toolbarPosition).toBe("top");
+  });
+
   it("moves the complete toolbar to the bottom live and keeps its Note form positioned", async () => {
-    const { lookup, reader } = createLookupHarness({
+    const { first, lookup, reader } = createLookupHarness({
       dictionaryPresentation: [
         { title: "Main", favorite: false },
         { title: "Backup", favorite: true }
@@ -2496,7 +2569,8 @@ describe("Hoshidicts dictionary tabs", () => {
       ".gsm-hoshidicts-primary-metadata-capsule"
     )!;
 
-    expect(reader.getPreferences().popupToolbarPosition).toBe("top");
+    // The anchor sits near the top, so the popup falls below the word and the
+    // toolbar is automatically pinned to the top.
     expect(popup.dataset.toolbarPosition).toBe("top");
     expect(popup.firstElementChild).toBe(chrome);
     expect(chrome.nextElementSibling).toBe(form);
@@ -2504,9 +2578,16 @@ describe("Hoshidicts dictionary tabs", () => {
     expect(chrome.lastElementChild).toBe(metadataStrip);
     expect(metadataCapsule.textContent).toContain("Frequency123 ★");
 
-    reader.updatePreferences({ popupToolbarPosition: "bottom" });
+    // Moving the anchor near the viewport bottom makes the popup open above the
+    // word, so the toolbar flips to the bottom while keeping the Note form
+    // positioned just before it.
+    setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
+    reader.getPopupElement().ownerDocument.defaultView!.dispatchEvent(
+      new (reader.getPopupElement().ownerDocument.defaultView as any).Event(
+        "resize"
+      )
+    );
 
-    expect(reader.getPreferences().popupToolbarPosition).toBe("bottom");
     expect(popup.dataset.toolbarPosition).toBe("bottom");
     expect(popup.firstElementChild).toBe(panel);
     expect(panel.nextElementSibling).toBe(form);
@@ -2532,13 +2613,26 @@ describe("Hoshidicts dictionary tabs", () => {
     expect(form.hidden).toBe(false);
     expect(popup.scrollTop).toBe(900);
 
-    reader.updatePreferences({ popupToolbarPosition: "top" });
+    // Returning the anchor to the top flips the popup below the word, so the
+    // toolbar returns to the top with the Note form after it.
+    setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+    reader.getPopupElement().ownerDocument.defaultView!.dispatchEvent(
+      new (reader.getPopupElement().ownerDocument.defaultView as any).Event(
+        "resize"
+      )
+    );
     expect(popup.dataset.toolbarPosition).toBe("top");
     expect(popup.firstElementChild).toBe(chrome);
     expect(chrome.nextElementSibling).toBe(form);
     expect(form.nextElementSibling).toBe(panel);
 
-    reader.updatePreferences({ popupToolbarPosition: "bottom" });
+    // And back to the bottom when the popup opens above the word again.
+    setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
+    reader.getPopupElement().ownerDocument.defaultView!.dispatchEvent(
+      new (reader.getPopupElement().ownerDocument.defaultView as any).Event(
+        "resize"
+      )
+    );
     expect(popup.dataset.toolbarPosition).toBe("bottom");
     expect(popup.firstElementChild).toBe(panel);
     expect(panel.nextElementSibling).toBe(form);
@@ -3955,10 +4049,13 @@ describe("Hoshidicts Shift-hover scanner", () => {
 
   it("shows not found and prefills Note when only a shorter prefix matches", async () => {
     const harness = createReaderHarness({
-      lookupMode: "shift",
-      popupToolbarPosition: "bottom"
+      lookupMode: "shift"
     });
     const second = harness.dom.window.document.getElementById("second")!;
+    // Anchor the selection near the viewport bottom so the notice opens above
+    // the word, which automatically pins its toolbar to the bottom.
+    setRect(harness.first, { left: 10, top: 700, right: 30, bottom: 720 });
+    setRect(second, { left: 30, top: 700, right: 90, bottom: 720 });
 
     dispatchMouse(harness.dom, harness.first, "mousedown", { button: 0 });
     const range = harness.dom.window.document.createRange();
