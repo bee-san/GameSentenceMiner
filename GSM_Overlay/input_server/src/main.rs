@@ -2302,7 +2302,7 @@ async fn handle_socket(
         }
     };
 
-    info!("client connected: {peer}");
+    debug!("client connected: {peer}");
 
     let (mut ws_sink, mut ws_stream) = ws.split();
 
@@ -2640,7 +2640,7 @@ async fn handle_socket(
         "service_features_changed(disconnect)",
     );
 
-    info!("client disconnected: {peer}");
+    debug!("client disconnected: {peer}");
 }
 
 async fn websocket_server(

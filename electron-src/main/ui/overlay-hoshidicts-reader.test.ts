@@ -1322,7 +1322,6 @@ describe("Hoshidicts safe popup rendering", () => {
     await expect(secondLookup).resolves.toMatchObject({ lookupCount: 5 });
   });
 });
-
 describe("Hoshidicts compact definition summaries", () => {
   it("normalizes the preferred dictionary as null or a bounded non-empty title", () => {
     const dom = createDom();
@@ -7641,5 +7640,4 @@ describe("Hoshidicts Shift-hover scanner", () => {
     expect(feedback?.textContent).not.toContain("pitch");
   });
 });
-
 

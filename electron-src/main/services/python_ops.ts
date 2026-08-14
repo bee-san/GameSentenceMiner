@@ -1,18 +1,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { spawn } from 'child_process';
 
 import {
-    BACKEND_GITHUB_REPO_URL,
     execFileAsync,
     getResourcesDir,
     getSanitizedPythonEnv,
     isDev,
     PACKAGE_NAME,
-    resolvePreReleaseMetadata,
+    resolvePreReleaseBackendWheelPath,
 } from '../util.js';
-import { getPreReleaseArchiveUrl } from '../../shared/prerelease.js';
+import { isBackendVersionCompatible } from './backend_version.js';
+
+export { isBackendVersionCompatible } from './backend_version.js';
 
 const PINNED_UV_VERSION = '0.9.22';
 
@@ -270,51 +270,6 @@ export async function getInstalledPackageVersion(
     }
 }
 
-const READ_DIRECT_URL_SCRIPT = `
-import json
-import sys
-from importlib.metadata import distributions
-
-for dist in distributions(name=sys.argv[1]):
-    try:
-        raw = dist.read_text("direct_url.json")
-        payload = json.loads(raw) if raw else None
-    except (OSError, UnicodeError, ValueError):
-        continue
-    if not isinstance(payload, dict):
-        continue
-    url = payload.get("url")
-    if isinstance(url, str) and url.strip():
-        print(json.dumps({"url": url.strip()}))
-        break
-`.trim();
-
-export async function getInstalledPackageDirectUrl(
-    pythonPath: string,
-    packageName: string
-): Promise<string | null> {
-    try {
-        const { stdout } = await execFileAsync(pythonPath, [
-            '-c',
-            READ_DIRECT_URL_SCRIPT,
-            packageName,
-        ]);
-        const payload: unknown = JSON.parse(stdout.trim());
-        if (
-            payload &&
-            typeof payload === 'object' &&
-            !Array.isArray(payload) &&
-            typeof (payload as { url?: unknown }).url === 'string'
-        ) {
-            const url = (payload as { url: string }).url.trim();
-            return url || null;
-        }
-    } catch {
-        // PyPI installs have no direct_url.json; malformed metadata fails closed.
-    }
-    return null;
-}
-
 export async function isPackageInstalled(
     pythonPath: string,
     packageName: string
@@ -448,105 +403,6 @@ export function getBundledBackendVersion(): string | null {
  * Stable clients accept their bundled Python version plus PEP 440 post releases
  * of that exact version, such as 2026.7.4.post1.
  */
-export function isBackendVersionCompatible(
-    installedVersion: string,
-    bundledVersion: string
-): boolean {
-    const escapedBundledVersion = bundledVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(
-        `^${escapedBundledVersion}(?:\\.post\\d+)?(?:\\+[A-Za-z0-9.-]+)?$`,
-        'i'
-    ).test(installedVersion);
-}
-
-export type BackendInstallReason =
-    | 'missing'
-    | 'source-mismatch'
-    | 'version-mismatch'
-    | 'post-release-check'
-    | 'current';
-
-export interface BundledBackendInstallPlan {
-    shouldInstall: boolean;
-    forceReinstall: boolean;
-    reason: BackendInstallReason;
-}
-
-export interface BundledBackendInstallInput {
-    installedVersion: string | null;
-    bundledVersion: string | null;
-    packageSpecifier: string;
-    isPreRelease: boolean;
-    isDevelopment?: boolean;
-    installedDirectUrl: string | null;
-}
-
-function normalizePackageSource(value: string | null): string | null {
-    const normalized = value?.trim().replace(/\/+$/u, '') ?? '';
-    return normalized || null;
-}
-
-export function planBundledBackendInstall(
-    input: BundledBackendInstallInput
-): BundledBackendInstallPlan {
-    if (!input.installedVersion) {
-        return {
-            shouldInstall: true,
-            forceReinstall: true,
-            reason: 'missing',
-        };
-    }
-
-    const installedSource = normalizePackageSource(input.installedDirectUrl);
-    const expectedSource = normalizePackageSource(input.packageSpecifier);
-    const expectedDevelopmentSource =
-        input.isDevelopment && expectedSource
-            ? normalizePackageSource(pathToFileURL(path.resolve(expectedSource)).href)
-            : null;
-    const sourceMatches =
-        input.isPreRelease || input.isDevelopment
-            ? installedSource !== null &&
-              (installedSource === expectedSource ||
-                  installedSource === expectedDevelopmentSource)
-            : installedSource === null;
-    if (!sourceMatches) {
-        return {
-            shouldInstall: true,
-            forceReinstall: true,
-            reason: 'source-mismatch',
-        };
-    }
-
-    if (
-        !input.isPreRelease &&
-        input.bundledVersion !== null &&
-        !isBackendVersionCompatible(
-            input.installedVersion,
-            input.bundledVersion
-        )
-    ) {
-        return {
-            shouldInstall: true,
-            forceReinstall: true,
-            reason: 'version-mismatch',
-        };
-    }
-
-    if (!input.isPreRelease && input.bundledVersion !== null) {
-        return {
-            shouldInstall: true,
-            forceReinstall: false,
-            reason: 'post-release-check',
-        };
-    }
-
-    return {
-        shouldInstall: false,
-        forceReinstall: false,
-        reason: 'current',
-    };
-}
-
 function getNextReleaseVersion(version: string): string | null {
     if (!/^\d+(?:\.\d+)+$/.test(version)) {
         return null;
@@ -560,15 +416,10 @@ function getNextReleaseVersion(version: string): string | null {
 /**
  * Specifier for installing the GSM backend package.
  *
- * Pre-release (beta) builds are cut from a branch whose backend code is not
- * published to PyPI, so we install from that branch's GitHub source archive
- * (`<repo>/archive/refs/heads/<branch>.zip`), read from the bundled
- * prerelease.json. This makes beta testers actually run the branch's backend
- * instead of a stale (or nonexistent) PyPI wheel for the bundled version. The zip
- * archive (rather than a `git+` specifier) keeps git from being a hard runtime
- * requirement on the user's machine. uv downloads + builds it in a temp dir, which
- * also sidesteps the read-only egg-info build failure that bundled-source installs
- * hit on AppImage squashfs mounts and macOS .app bundles (issue #479).
+ * Pre-release builds install the platform-specific wheel bundled with the
+ * Electron app. CI builds that wheel from the same commit and version as the
+ * app, so beta users do not need Git or a Rust compiler and cannot drift to a
+ * newer branch head after the app artifact was produced.
  *
  * For stable production releases we install from PyPI within the compatible
  * release window. For example, a client bundling 2026.7.4 installs
@@ -585,12 +436,9 @@ export function getBundledBackendSpecifier(): string {
         return getProjectPath();
     }
 
-    const preReleaseArchive = getPreReleaseArchiveUrl(
-        resolvePreReleaseMetadata(),
-        BACKEND_GITHUB_REPO_URL
-    );
-    if (preReleaseArchive) {
-        return preReleaseArchive;
+    const preReleaseWheelPath = resolvePreReleaseBackendWheelPath();
+    if (preReleaseWheelPath) {
+        return preReleaseWheelPath;
     }
 
     const version = getBundledBackendVersion();
