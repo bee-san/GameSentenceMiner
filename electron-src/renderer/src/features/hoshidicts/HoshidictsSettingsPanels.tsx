@@ -2017,7 +2017,17 @@ export function MiningPanel({ controller }: { controller: Controller }) {
   const setMiningValue = <K extends keyof MiningProfileDraft>(
     key: K,
     value: MiningProfileDraft[K]
-  ) => updateMiningDraft((current) => ({ ...current, [key]: value }));
+  ) =>
+    updateMiningDraft((current) => {
+      const next = { ...current, [key]: value };
+      // Deck-scoped duplicate checking is meaningless without a deck, so a
+      // deck-clearing edit coerces the scope back to collection in the same
+      // update rather than persisting an unreachable deck/deck-root scope.
+      if (key === "deck" && String(value).trim().length === 0) {
+        next.duplicateScope = "collection";
+      }
+      return next;
+    });
 
   return (
     <section className="hoshidicts-section hoshidicts-mining">
@@ -2182,7 +2192,13 @@ export function MiningPanel({ controller }: { controller: Controller }) {
             label={t("settings.hoshidicts.mining.duplicateScope")}
             value={miningDraft.duplicateScope}
             disabled={miningBusy || !miningDraft.checkForDuplicates}
-            options={DUPLICATE_SCOPES.map((scope) => ({
+            options={DUPLICATE_SCOPES.filter(
+              // Deck / deck-root scopes need a configured deck to match against,
+              // so offer only collection when the deck is blank.
+              (scope) =>
+                scope.value === "collection" ||
+                miningDraft.deck.trim().length > 0
+            ).map((scope) => ({
               value: scope.value,
               label: t(scope.labelKey)
             }))}

@@ -3124,6 +3124,68 @@ describe("HoshidictsSettingsWindow", () => {
     );
   });
 
+  it("offers every duplicate scope while a mining deck is configured", async () => {
+    await render();
+    await openMining();
+
+    const scope = container.querySelector<HTMLSelectElement>(
+      "#hoshidicts-mining-duplicate-scope"
+    );
+    expect(
+      Array.from(scope?.options ?? []).map((option) => option.value)
+    ).toEqual(["collection", "deck", "deck-root"]);
+  });
+
+  it("offers only collection scope when no mining deck is configured", async () => {
+    ipc.configure({
+      state: {
+        ...baseState,
+        miningProfile: makeHoshidictsMiningProfile({ deck: "" })
+      }
+    });
+
+    await render();
+    await openMining();
+
+    const scope = container.querySelector<HTMLSelectElement>(
+      "#hoshidicts-mining-duplicate-scope"
+    );
+    expect(
+      Array.from(scope?.options ?? []).map((option) => option.value)
+    ).toEqual(["collection"]);
+  });
+
+  it("coerces duplicate scope to collection when the deck is cleared", async () => {
+    vi.useFakeTimers();
+    ipc.configure({
+      state: {
+        ...baseState,
+        miningProfile: makeHoshidictsMiningProfile({
+          deck: "Mining",
+          duplicateScope: "deck-root"
+        })
+      },
+      miningOptions: makeHoshidictsMiningOptions({ connected: false })
+    });
+
+    await render();
+    await openMining();
+
+    await flushAfter(() => {
+      setInputValue(
+        container.querySelector<HTMLInputElement>("#hoshidicts-mining-deck"),
+        ""
+      );
+    });
+
+    expect(
+      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
+    ).toMatchObject({
+      deck: "",
+      duplicateScope: "collection"
+    });
+  });
+
   it("auto-saves marker choices, blanks, and arbitrary literal values", async () => {
     vi.useFakeTimers();
     await render();
