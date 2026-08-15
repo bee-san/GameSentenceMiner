@@ -4681,6 +4681,7 @@ describe("Hoshidicts Shift-hover scanner", () => {
     socket.receive(kanjiResult(directRequest.requestId));
     expect(popup.firstElementChild?.classList.contains("gsm-hoshidicts-result-chrome"))
       .toBe(true);
+    expect(first.classList.contains("gsm-hoshidicts-source-match")).toBe(false);
     expect(popup.querySelector(".gsm-hoshidicts-kanji-glyph")?.textContent).toBe("食");
     expect(popup.textContent).toContain("My kanji dictionary");
     expect(

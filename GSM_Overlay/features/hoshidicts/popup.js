@@ -2068,10 +2068,12 @@
 
       setRenderedToolbar(toolbar, noteControls.form);
 
-      sourceHighlighter.apply(
-        candidate,
-        renderOptions.highlightText || kanji.character
-      );
+      if (sourceHighlightEnabled) {
+        sourceHighlighter.apply(
+          candidate,
+          renderOptions.highlightText || kanji.character
+        );
+      }
     }
 
     function renderResults(results, candidate, renderContext = {}) {
