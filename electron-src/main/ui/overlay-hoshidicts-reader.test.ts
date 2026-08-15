@@ -123,6 +123,24 @@ describe("Hoshidicts safe popup rendering", () => {
     expect(bottomChromeRule).toMatch(/margin(?:-top)?\s*:\s*auto/);
   });
 
+  it("keeps the transient status attached to the toolbar in the bottom status surface", () => {
+    // The status node is a top-level popup child ordered just before the bottom
+    // toolbar. If only the toolbar carries `margin-top: auto`, the free space
+    // collapses BETWEEN the status and the toolbar, floating the status up the
+    // middle of the popup and splitting the Yomitan-style status surface. So a
+    // visible status in bottom mode must own the floor group's auto margin, and
+    // the toolbar immediately after it must not add a second one.
+    const bottomFeedbackRule = readerCssRule(
+      '.gsm-hoshidicts-popup[data-toolbar-position="bottom"] .gsm-hoshidicts-mining-feedback'
+    ) ?? "";
+    expect(bottomFeedbackRule).toMatch(/margin-top\s*:\s*auto/);
+
+    const attachedChromeRule = readerCssRule(
+      '.gsm-hoshidicts-popup[data-toolbar-position="bottom"] .gsm-hoshidicts-mining-feedback:not([hidden]) + .gsm-hoshidicts-result-chrome'
+    ) ?? "";
+    expect(attachedChromeRule).toMatch(/margin-top\s*:\s*0/);
+  });
+
   // reader.css owns these palettes; jsdom applies no CSS, so scraping the file
   // only restated it. What matters behaviourally is that every theme the reader
   // can select has a rule to select, which the reader test at the bottom of this

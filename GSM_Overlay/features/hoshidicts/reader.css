@@ -1142,6 +1142,20 @@ html[data-hoshidicts-theme="girlypop"] .gsm-hoshidicts-popup {
   border-bottom: 1px solid var(--hoshidicts-border);
 }
 
+/* At the bottom the transient status is the top of the floor group so it owns
+   the auto margin that pushes the whole status surface to the popup floor. The
+   toolbar keeps its own auto margin for the hidden-status case above. */
+.gsm-hoshidicts-popup[data-toolbar-position="bottom"] .gsm-hoshidicts-mining-feedback {
+  margin-top: auto;
+}
+
+/* When a visible status precedes the bottom toolbar the toolbar drops its own
+   auto margin so free space collapses ABOVE the status and keeps the surface
+   together instead of splitting it apart. */
+.gsm-hoshidicts-popup[data-toolbar-position="bottom"] .gsm-hoshidicts-mining-feedback:not([hidden]) + .gsm-hoshidicts-result-chrome {
+  margin-top: 0;
+}
+
 .gsm-hoshidicts-primary-header {
   min-height: 42px;
   padding: 11px;
