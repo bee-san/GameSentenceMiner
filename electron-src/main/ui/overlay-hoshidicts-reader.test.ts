@@ -153,6 +153,30 @@ describe("Hoshidicts safe popup rendering", () => {
     expect(readFeatureFile("reader.css")).toContain(selector);
   });
 
+  // Every theme is only usable if its palette rule declares the full token set
+  // the popup reads; a block that omits one falls back to an unrelated theme's
+  // value and looks broken. The default (dark) block is the reference set.
+  it.each([...HOSHIDICTS_THEMES] as string[])(
+    "declares every palette token in the %s theme rule",
+    (theme: string) => {
+      const css = readFeatureFile("reader.css");
+      const paletteTokens = (selector: string) => {
+        const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const rule = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "u").exec(css);
+        return new Set(
+          [...(rule?.[1] ?? "").matchAll(/(--hoshidicts-palette-[a-z0-9-]+)\s*:/gu)]
+            .map((match) => match[1])
+        );
+      };
+      const expected = paletteTokens('html[data-hoshidicts-theme="default"]');
+      expect(expected.size).toBeGreaterThan(0);
+      const declared = paletteTokens(
+        `html[data-hoshidicts-theme="${theme}"]`
+      );
+      expect([...expected].sort()).toEqual([...declared].sort());
+    }
+  );
+
   it("blurs glossary content without obscuring definition tags", () => {
     const blurRule =
       /\.gsm-hoshidicts-definitions\[data-definition-blur-state="pending"\]\s+\.gsm-hoshidicts-glossary-content,\s*\.gsm-hoshidicts-definitions\[data-definition-blur-state="blurred"\]\s+\.gsm-hoshidicts-glossary-content\s*\{(?<declarations>[^}]*)\}/u.exec(

@@ -47,6 +47,27 @@ html[data-hoshidicts-theme="default"] {
   --hoshidicts-palette-error: #d9645f;
 }
 
+html[data-hoshidicts-theme="miku"] {
+  --hoshidicts-palette-color-scheme: dark;
+  --hoshidicts-palette-base-100: #1c2529;
+  --hoshidicts-palette-base-200: #233034;
+  --hoshidicts-palette-base-300: #2e3d43;
+  --hoshidicts-palette-base-content: #e6f4f2;
+  --hoshidicts-palette-primary: #39c5bb;
+  --hoshidicts-palette-primary-content: #062421;
+  --hoshidicts-palette-secondary: #e56aa0;
+  --hoshidicts-palette-secondary-content: #2a0d1b;
+  --hoshidicts-palette-accent: #5ce0d6;
+  --hoshidicts-palette-accent-content: #052421;
+  --hoshidicts-palette-neutral: #2e3d43;
+  --hoshidicts-palette-neutral-content: #e6f4f2;
+  --hoshidicts-palette-info: #4fb8d8;
+  --hoshidicts-palette-info-content: #04171e;
+  --hoshidicts-palette-success: #5fc98d;
+  --hoshidicts-palette-warning: #e0b23c;
+  --hoshidicts-palette-error: #e5695f;
+}
+
 html[data-hoshidicts-theme="catppuccin-mocha"] {
   --hoshidicts-palette-color-scheme: dark;
   --hoshidicts-palette-base-100: #181825;
@@ -1094,6 +1115,25 @@ html[data-hoshidicts-theme="girlypop"] .gsm-hoshidicts-popup {
     inset 0 1px 0 rgba(255, 255, 255, 0.72),
     0 18px 48px rgba(111, 44, 93, 0.22),
     0 2px 8px rgba(111, 44, 93, 0.16);
+}
+
+html[data-hoshidicts-theme="miku"] .gsm-hoshidicts-popup {
+  background:
+    radial-gradient(
+      circle at 100% 0,
+      color-mix(in srgb, var(--hoshidicts-palette-primary) 18%, transparent),
+      transparent 44%
+    ),
+    radial-gradient(
+      circle at 0 100%,
+      color-mix(in srgb, var(--hoshidicts-palette-secondary) 12%, transparent),
+      transparent 48%
+    ),
+    var(--hoshidicts-popup-background);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 18px 48px rgba(3, 24, 22, 0.62),
+    0 0 0 1px color-mix(in srgb, var(--hoshidicts-palette-primary) 24%, transparent);
 }
 
 .gsm-hoshidicts-popup::-webkit-scrollbar {

@@ -61,7 +61,7 @@ const hoshidictsStyles = readFileSync(
 );
 
 const EXPECTED_HOSHIDICTS_THEME_GROUPS = [
-  ["default", "catppuccin-mocha", "solarized-dark", "dark", "synthwave",
+  ["default", "miku", "catppuccin-mocha", "solarized-dark", "dark", "synthwave",
    "halloween", "forest", "aqua", "black", "luxury", "dracula", "business",
    "night", "coffee", "dim", "sunset", "abyss"],
   ["girlypop", "solarized-light", "light", "cupcake", "bumblebee", "emerald",
@@ -1762,6 +1762,11 @@ describe("HoshidictsSettingsWindow", () => {
         (option) => option.value === "girlypop"
       )?.text.trim()
     ).toBe("Girlypop");
+    expect(
+      Array.from(theme?.options ?? []).find(
+        (option) => option.value === "miku"
+      )?.text.trim()
+    ).toBe("Miku");
   });
 
   it("defaults the popup toolbar to auto and saves fixed positions", async () => {

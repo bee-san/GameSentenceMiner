@@ -352,6 +352,7 @@ export const MIN_HOSHIDICTS_POPUP_BACKDROP_BLUR_PX = 0;
 export const MAX_HOSHIDICTS_POPUP_BACKDROP_BLUR_PX = 32;
 export type HoshidictsTheme =
     | 'default'
+    | 'miku'
     | 'girlypop'
     | Exclude<GsmThemeId, 'gsm-dark'>;
 
@@ -376,6 +377,11 @@ export const HOSHIDICTS_THEME_DEFINITIONS: readonly HoshidictsThemeDefinition[] 
             id: 'default',
             category: 'dark',
             labelKey: 'settings.themeCatalog.names.gsmDark',
+        },
+        {
+            id: 'miku',
+            category: 'dark',
+            labelKey: 'settings.themeCatalog.names.miku',
         },
         ...GSM_HOSHIDICTS_THEME_DEFINITIONS.filter(
             (theme) => theme.category === 'dark'
