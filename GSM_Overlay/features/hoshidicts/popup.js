@@ -972,6 +972,7 @@
     let popupButtons = options.popupButtons;
     let currentToolbar = null;
     let currentNoteForm = null;
+    let currentFeedback = null;
     let actionContexts = new Set();
     let masonryFrame = null;
     const masonryObserver = typeof windowRef.ResizeObserver === "function"
@@ -1033,16 +1034,38 @@
       if (!currentToolbar || !currentNoteForm) {
         return;
       }
+      // Keep the transient status (e.g. "Added to Anki.") attached to the
+      // toolbar so the bottom variant carries the complete Yomitan-style
+      // status surface instead of leaving feedback floating at the popup top.
+      const desired =
+        toolbarPosition === "bottom"
+          ? [currentNoteForm, currentFeedback, currentToolbar]
+          : [currentToolbar, currentFeedback, currentNoteForm];
+      const ordered = desired.filter(Boolean);
+      // Only touch the DOM when the surface is not already in the desired
+      // order. A no-op reposition must never detach a focused control (e.g. an
+      // open Note field), which throws in jsdom and reorders under focus.
+      const alreadyOrdered = ordered.every((node, index) => {
+        const next = ordered[index + 1];
+        return !next || node.nextElementSibling === next;
+      }) &&
+        (toolbarPosition === "bottom"
+          ? popup.lastElementChild === currentToolbar
+          : popup.firstElementChild === currentToolbar);
+      if (alreadyOrdered) {
+        return;
+      }
       if (toolbarPosition === "bottom") {
-        popup.append(currentNoteForm, currentToolbar);
+        popup.append(...ordered);
       } else {
-        popup.prepend(currentToolbar, currentNoteForm);
+        popup.prepend(...ordered);
       }
     }
 
-    function setRenderedToolbar(toolbar, noteForm) {
+    function setRenderedToolbar(toolbar, noteForm, feedback = null) {
       currentToolbar = toolbar;
       currentNoteForm = noteForm;
+      currentFeedback = feedback && feedback.parentNode === popup ? feedback : null;
       applyToolbarLayout();
     }
 
@@ -1405,9 +1428,8 @@
       });
       primaryHeader.appendChild(actions);
       const toolbar = createResultChrome(primaryHeader);
-      popup.append(toolbar, noteControls.form);
-      popup.appendChild(notice);
-      setRenderedToolbar(toolbar, noteControls.form);
+      popup.append(toolbar, notice, noteControls.form);
+      setRenderedToolbar(toolbar, noteControls.form, notice);
     }
 
     function appendMetadata(
@@ -1686,6 +1708,7 @@
       renderContext,
       {
         dictionaryDisplayNames,
+        feedback: providedFeedback,
         metadataStrip,
         noteButton,
         primaryHeader,
@@ -1694,12 +1717,23 @@
       } = {}
     ) {
       panel.replaceChildren();
-      const feedback = documentRef.createElement("div");
-      feedback.className = "gsm-hoshidicts-mining-feedback";
-      feedback.setAttribute("role", "status");
-      feedback.setAttribute("aria-live", "polite");
-      feedback.hidden = true;
-      panel.appendChild(feedback);
+      // The transient status lives in the toolbar/status surface (a top-level
+      // popup child, repositioned with the toolbar), not inside the scrolling
+      // definition panel — so callers pass a persistent element to reuse across
+      // tab re-renders. Fall back to a panel-local node only when none is given.
+      let feedback = providedFeedback || null;
+      if (feedback) {
+        feedback.hidden = true;
+        feedback.textContent = "";
+        delete feedback.dataset.kind;
+      } else {
+        feedback = documentRef.createElement("div");
+        feedback.className = "gsm-hoshidicts-mining-feedback";
+        feedback.setAttribute("role", "status");
+        feedback.setAttribute("aria-live", "polite");
+        feedback.hidden = true;
+        panel.appendChild(feedback);
+      }
       const miningButtons = [];
       const miningItems = [];
       const audioItems = [];
@@ -1988,7 +2022,7 @@
       });
       primaryHeader.appendChild(actions);
       const toolbar = createResultChrome(primaryHeader);
-      popup.append(toolbar, noteControls.form, feedback);
+      popup.append(toolbar, feedback, noteControls.form);
 
       for (const kanjiEntry of kanji.entries) {
         const entry = documentRef.createElement("article");
@@ -2066,7 +2100,7 @@
         popup.appendChild(entry);
       }
 
-      setRenderedToolbar(toolbar, noteControls.form);
+      setRenderedToolbar(toolbar, noteControls.form, feedback);
 
       if (sourceHighlightEnabled) {
         sourceHighlighter.apply(
@@ -2186,8 +2220,16 @@
       primaryHeader.className =
         "gsm-hoshidicts-entry-header gsm-hoshidicts-primary-header";
       const toolbar = createResultChrome(primaryHeader, metadataStrip);
-      popup.append(toolbar, noteControls.form, panel);
-      setRenderedToolbar(toolbar, noteControls.form);
+      // Persistent status node lives beside the toolbar (not in the scrolling
+      // panel) so it travels with the toolbar when placement flips it to the
+      // bottom, keeping the complete Yomitan-style status surface together.
+      const feedback = documentRef.createElement("div");
+      feedback.className = "gsm-hoshidicts-mining-feedback";
+      feedback.setAttribute("role", "status");
+      feedback.setAttribute("aria-live", "polite");
+      feedback.hidden = true;
+      popup.append(toolbar, feedback, noteControls.form, panel);
+      setRenderedToolbar(toolbar, noteControls.form, feedback);
 
       const tabButtons = [];
       const requestedTab = isRecord(renderContext.selectedDictionaryTab)
@@ -2265,6 +2307,7 @@
           },
           {
             dictionaryDisplayNames,
+            feedback,
             metadataStrip,
             noteButton: noteControls.button,
             primaryHeader,

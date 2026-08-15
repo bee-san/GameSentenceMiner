@@ -2589,6 +2589,9 @@ describe("Hoshidicts dictionary tabs", () => {
     const panel = popup.querySelector<HTMLElement>(
       ".gsm-hoshidicts-tab-panel"
     )!;
+    const feedback = popup.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-mining-feedback"
+    )!;
     const metadataStrip = chrome.querySelector<HTMLElement>(
       ".gsm-hoshidicts-metadata-strip"
     )!;
@@ -2597,17 +2600,20 @@ describe("Hoshidicts dictionary tabs", () => {
     )!;
 
     // The anchor sits near the top, so the popup falls below the word and the
-    // toolbar is automatically pinned to the top.
+    // toolbar is automatically pinned to the top. The transient status node
+    // rides directly under the toolbar as part of the status surface.
     expect(popup.dataset.toolbarPosition).toBe("top");
     expect(popup.firstElementChild).toBe(chrome);
-    expect(chrome.nextElementSibling).toBe(form);
+    expect(chrome.nextElementSibling).toBe(feedback);
+    expect(feedback.nextElementSibling).toBe(form);
     expect(form.nextElementSibling).toBe(panel);
     expect(chrome.lastElementChild).toBe(metadataStrip);
     expect(metadataCapsule.textContent).toContain("Frequency123 ★");
 
     // Moving the anchor near the viewport bottom makes the popup open above the
-    // word, so the toolbar flips to the bottom while keeping the Note form
-    // positioned just before it.
+    // word, so the toolbar flips to the bottom while keeping the Note form and
+    // the transient status positioned just before it (a complete bottom
+    // status surface).
     setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
     reader.getPopupElement().ownerDocument.defaultView!.dispatchEvent(
       new (reader.getPopupElement().ownerDocument.defaultView as any).Event(
@@ -2618,6 +2624,8 @@ describe("Hoshidicts dictionary tabs", () => {
     expect(popup.dataset.toolbarPosition).toBe("bottom");
     expect(popup.firstElementChild).toBe(panel);
     expect(panel.nextElementSibling).toBe(form);
+    expect(form.nextElementSibling).toBe(feedback);
+    expect(feedback.nextElementSibling).toBe(chrome);
     expect(popup.lastElementChild).toBe(chrome);
     expect(chrome.lastElementChild).toBe(metadataStrip);
     expect(metadataCapsule.isConnected).toBe(true);
@@ -2641,7 +2649,7 @@ describe("Hoshidicts dictionary tabs", () => {
     expect(popup.scrollTop).toBe(900);
 
     // Returning the anchor to the top flips the popup below the word, so the
-    // toolbar returns to the top with the Note form after it.
+    // toolbar returns to the top with the status and Note form after it.
     setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
     reader.getPopupElement().ownerDocument.defaultView!.dispatchEvent(
       new (reader.getPopupElement().ownerDocument.defaultView as any).Event(
@@ -2650,7 +2658,8 @@ describe("Hoshidicts dictionary tabs", () => {
     );
     expect(popup.dataset.toolbarPosition).toBe("top");
     expect(popup.firstElementChild).toBe(chrome);
-    expect(chrome.nextElementSibling).toBe(form);
+    expect(chrome.nextElementSibling).toBe(feedback);
+    expect(feedback.nextElementSibling).toBe(form);
     expect(form.nextElementSibling).toBe(panel);
 
     // And back to the bottom when the popup opens above the word again.
@@ -2663,7 +2672,61 @@ describe("Hoshidicts dictionary tabs", () => {
     expect(popup.dataset.toolbarPosition).toBe("bottom");
     expect(popup.firstElementChild).toBe(panel);
     expect(panel.nextElementSibling).toBe(form);
+    expect(form.nextElementSibling).toBe(feedback);
+    expect(feedback.nextElementSibling).toBe(chrome);
     expect(popup.lastElementChild).toBe(chrome);
+  });
+
+  it("keeps transient mining feedback in the bottom status surface with the toolbar", async () => {
+    const mine = vi.fn(async () => ({ success: true, noteId: 123 }));
+    const { first, lookup, reader } = createLookupHarness({
+      dictionaryPresentation: [{ title: "Main", favorite: true }],
+      popupToolbarPosition: "auto",
+      getMiningStatus: async () => ({ available: true }),
+      onMine: mine
+    });
+
+    // Anchor near the bottom of the viewport: the popup opens above the word,
+    // so the toolbar (headword, controls, and status) pins to the bottom.
+    setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
+    const { popup } = await lookup((requestId) =>
+      lookupResultWithDictionaries(requestId, [
+        { dictionary: "Main", glossary: "above the word" }
+      ])
+    );
+    await flushPromises();
+    expect(popup.dataset.toolbarPosition).toBe("bottom");
+
+    const chrome = popup.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-result-chrome"
+    )!;
+    const panel = popup.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-tab-panel"
+    )!;
+
+    popup
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-mine-button")!
+      .click();
+    await flushPromises();
+    await flushPromises();
+
+    const feedback = popup.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-mining-feedback"
+    )!;
+    expect(feedback.hidden).toBe(false);
+    expect(feedback.textContent).toBe("Added to Anki.");
+
+    // The transient status must belong to the bottom toolbar/status surface,
+    // not float at the very top of the popup above the definitions while the
+    // toolbar sits at the bottom. It must render after the definition panel and
+    // sit adjacent to the toolbar chrome in the bottom status surface.
+    const order = (element: Element) =>
+      Array.prototype.indexOf.call(
+        popup.querySelectorAll("*"),
+        element
+      );
+    expect(order(feedback)).toBeGreaterThan(order(panel));
+    expect(feedback.nextElementSibling).toBe(chrome);
   });
 
   it("shows short, accessible glossary dictionary tabs without changing their identity", async () => {
@@ -4574,7 +4637,9 @@ describe("Hoshidicts Shift-hover scanner", () => {
       ".gsm-hoshidicts-primary-metadata-capsule"
     )).not.toBeNull();
     expect(tabPanel?.getAttribute("role")).toBeNull();
-    expect(chrome?.nextElementSibling === noteForm).toBe(true);
+    const feedback = popup.querySelector(".gsm-hoshidicts-mining-feedback");
+    expect(chrome?.nextElementSibling === feedback).toBe(true);
+    expect(feedback?.nextElementSibling === noteForm).toBe(true);
     expect(noteForm?.nextElementSibling === tabPanel).toBe(true);
     expect(primaryHeader?.querySelector("ruby")).not.toBeNull();
     const pitchReading = primaryHeader?.querySelector<HTMLElement>(
