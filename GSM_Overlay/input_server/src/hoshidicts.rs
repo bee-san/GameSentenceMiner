@@ -5,11 +5,10 @@ use hoshidicts::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{c_char, c_int};
+use std::ffi::c_int;
 use std::fs;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
-use std::slice;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::task;
@@ -51,64 +50,6 @@ const REQUIRED_DICTIONARY_FILES: [&str; 3] = ["hash.table", "bloom.filter", "blo
 // silently load a dictionary the engine skips. GSM refuses it instead, forcing
 // a clear "missing format marker" diagnostic and a manual re-import.
 const HOSHIDICTS_MARKERS: [&str; 3] = [".hoshidicts_3", ".hoshidicts_2", ".hoshidicts_1"];
-
-/// Native string view: a borrowed `(ptr, len)` byte span handed back by the
-/// hoshidicts crate's accessors. GSM copies out of it under the service lock,
-/// enforcing its own UTF-8, per-field, and aggregate byte budgets rather than
-/// trusting the borrowed slice, so this stays a plain `(ptr, len)` pair.
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdStr {
-    ptr: *const c_char,
-    len: usize,
-}
-
-impl HdStr {
-    /// Borrow a native `&str` (already length-delimited by the crate) as the
-    /// `(ptr, len)` view the copy helpers validate and bound.
-    fn borrow(value: &str) -> Self {
-        Self {
-            ptr: value.as_ptr().cast(),
-            len: value.len(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct HdFrequency {
-    value: i32,
-    display_value: HdStr,
-}
-
-struct HdFrequencyEntry {
-    dict_name: HdStr,
-    frequencies: *const HdFrequency,
-    frequencies_count: usize,
-}
-
-#[derive(Clone, Copy)]
-struct HdPitch {
-    position: i32,
-    pattern: HdStr,
-    nasal: *const i32,
-    nasal_count: usize,
-    devoice: *const i32,
-    devoice_count: usize,
-}
-
-struct HdPitchEntry {
-    dict_name: HdStr,
-    pitches: *const HdPitch,
-    pitches_count: usize,
-    transcriptions: *const HdStr,
-    transcriptions_count: usize,
-}
-
-#[derive(Clone, Copy)]
-struct HdDictionaryStyle {
-    dict_name: HdStr,
-    styles: HdStr,
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
@@ -1021,9 +962,8 @@ impl NativeEngine {
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                let frequencies =
-                    bridge_frequency_entries(result.term().frequencies(), &mut copy_budget)?;
-                let pitches = bridge_pitch_entries(result.term().pitches(), &mut copy_budget)?;
+                let frequencies = frequency_entries(result.term().frequencies(), &mut copy_budget)?;
+                let pitches = pitch_entries(result.term().pitches(), &mut copy_budget)?;
 
                 Ok(LookupResult {
                     matched: copy_bounded_str(result.matched(), "matched text", &mut copy_budget)?,
@@ -1154,77 +1094,8 @@ impl NativeEngine {
             .query()
             .styles()
             .map_err(|_| "native Hoshidicts dictionary styles lookup failed".to_string())?;
-        bridge_dictionary_styles(styles.styles())
+        dictionary_styles(styles.styles())
     }
-}
-
-unsafe fn checked_slice<'a, T>(
-    pointer: *const T,
-    count: usize,
-    label: &str,
-) -> Result<&'a [T], String> {
-    if count == 0 {
-        return Ok(&[]);
-    }
-    if pointer.is_null() {
-        return Err(format!("native {label} pointer was null"));
-    }
-    Ok(slice::from_raw_parts(pointer, count))
-}
-
-unsafe fn copy_hd_string_with_limit(
-    value: HdStr,
-    label: &str,
-    maximum_bytes: usize,
-) -> Result<String, String> {
-    if value.len == 0 {
-        return Ok(String::new());
-    }
-    if value.ptr.is_null() {
-        return Err(format!("native {label} pointer was null"));
-    }
-    if value.len > maximum_bytes {
-        return Err(format!("native {label} exceeds the permitted size"));
-    }
-    let bytes = slice::from_raw_parts(value.ptr.cast::<u8>(), value.len);
-    String::from_utf8(bytes.to_vec()).map_err(|_| format!("native {label} was not valid UTF-8"))
-}
-
-unsafe fn copy_dictionary_styles(
-    pointer: *const HdDictionaryStyle,
-    count: usize,
-) -> Result<Vec<DictionaryStyle>, String> {
-    if count > MAX_DICTIONARIES {
-        return Err("native Hoshidicts returned too many dictionary styles".into());
-    }
-    let native_styles = checked_slice(pointer, count, "dictionary styles")?;
-    // copy_hd_string_with_limit bounds each field, and reader.js applies the
-    // same per-entry and aggregate caps again on the way in.
-    native_styles
-        .iter()
-        .map(|style| {
-            Ok(DictionaryStyle {
-                dictionary: copy_hd_string_with_limit(
-                    style.dict_name,
-                    "style dictionary",
-                    MAX_STYLE_DICTIONARY_BYTES,
-                )?,
-                styles: copy_hd_string_with_limit(
-                    style.styles,
-                    "dictionary stylesheet",
-                    MAX_DICTIONARY_STYLE_BYTES,
-                )?,
-            })
-        })
-        .collect()
-}
-
-unsafe fn copy_hd_string_bounded(
-    value: HdStr,
-    label: &str,
-    budget: &mut usize,
-) -> Result<String, String> {
-    copy_hd_string_bounded_with_limit(value, label, budget, MAX_NATIVE_STRING_BYTES)
 }
 
 /// Accumulates one copy against the aggregate byte cap.
@@ -1241,94 +1112,107 @@ fn claim_native_bytes(budget: &mut usize, bytes: usize, label: &str) -> Result<(
     Ok(())
 }
 
-unsafe fn copy_hd_string_bounded_with_limit(
-    value: HdStr,
+/// Copy a crate-borrowed `&str` into an owned `String` under the aggregate
+/// budget and a per-field byte cap.
+///
+/// The crate hands back a real, already-length-delimited UTF-8 `&str`, so the
+/// only work left is GSM's own policy: claim the bytes against the aggregate
+/// response budget before allocating, then reject any single field larger than
+/// its per-field cap. An empty field copies to an empty `String`.
+fn copy_bounded_str_with_limit(
+    value: &str,
     label: &str,
     budget: &mut usize,
     maximum_bytes: usize,
 ) -> Result<String, String> {
-    claim_native_bytes(budget, value.len, label)?;
-    copy_hd_string_with_limit(value, label, maximum_bytes)
+    claim_native_bytes(budget, value.len(), label)?;
+    if value.len() > maximum_bytes {
+        return Err(format!("native {label} exceeds the permitted size"));
+    }
+    Ok(value.to_owned())
 }
 
-unsafe fn copy_frequency_entries(
-    pointer: *const HdFrequencyEntry,
-    count: usize,
+/// Copy a crate-borrowed `&str` under the aggregate budget and the default
+/// per-field byte cap. See `copy_bounded_str_with_limit`.
+fn copy_bounded_str(value: &str, label: &str, budget: &mut usize) -> Result<String, String> {
+    copy_bounded_str_with_limit(value, label, budget, MAX_NATIVE_STRING_BYTES)
+}
+
+/// Copy a crate-borrowed `&str` under a per-field byte cap only.
+///
+/// Dictionary styles are not part of a lookup response and are never counted
+/// against the aggregate lookup budget, so this bounds each field on its own
+/// without touching a running budget.
+fn bound_str(value: &str, label: &str, maximum_bytes: usize) -> Result<String, String> {
+    if value.len() > maximum_bytes {
+        return Err(format!("native {label} exceeds the permitted size"));
+    }
+    Ok(value.to_owned())
+}
+
+/// Convert the crate's borrowed frequency entries into GSM's owned models,
+/// claiming the per-field and aggregate byte budgets before each copy.
+///
+/// The crate returns `&[FrequencyEntry]` (each wrapping `&[Frequency]`) with
+/// safe `&str`/`i32` accessors, so there is no raw `(ptr, len)` view to
+/// reconstruct: the verbatim value/display-value semantics and the byte limits
+/// live directly in this one conversion.
+fn frequency_entries(
+    entries: &[hoshidicts::FrequencyEntry],
     budget: &mut usize,
 ) -> Result<Vec<LookupFrequencyEntry>, String> {
-    checked_slice(pointer, count, "frequency entries")?
+    entries
         .iter()
         .map(|entry| {
-            let frequencies = checked_slice(
-                entry.frequencies,
-                entry.frequencies_count,
-                "frequency values",
-            )?
-            .iter()
-            .map(|frequency| {
-                Ok(LookupFrequency {
-                    value: frequency.value,
-                    display_value: copy_hd_string_bounded(
-                        frequency.display_value,
-                        "frequency display value",
-                        budget,
-                    )?,
+            let frequencies = entry
+                .frequencies()
+                .iter()
+                .map(|frequency| {
+                    Ok(LookupFrequency {
+                        value: frequency.value(),
+                        display_value: copy_bounded_str(
+                            frequency.display_value(),
+                            "frequency display value",
+                            budget,
+                        )?,
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+                .collect::<Result<Vec<_>, String>>()?;
             Ok(LookupFrequencyEntry {
-                dictionary: copy_hd_string_bounded(
-                    entry.dict_name,
-                    "frequency dictionary",
-                    budget,
-                )?,
+                dictionary: copy_bounded_str(entry.dict_name(), "frequency dictionary", budget)?,
                 frequencies,
             })
         })
         .collect()
 }
 
-unsafe fn copy_pitch_entries(
-    pointer: *const HdPitchEntry,
-    count: usize,
+/// Convert the crate's borrowed pitch entries into GSM's owned models,
+/// claiming the byte budgets before each copy. See `frequency_entries`.
+fn pitch_entries(
+    entries: &[hoshidicts::PitchEntry],
     budget: &mut usize,
 ) -> Result<Vec<LookupPitchEntry>, String> {
-    checked_slice(pointer, count, "pitch entries")?
+    entries
         .iter()
         .map(|entry| {
-            let pitches = checked_slice(entry.pitches, entry.pitches_count, "pitch values")?
+            let pitches = entry
+                .pitches()
                 .iter()
                 .map(|pitch| {
                     Ok(LookupPitch {
-                        position: pitch.position,
-                        pattern: copy_hd_string_bounded(pitch.pattern, "pitch pattern", budget)?,
-                        nasal: checked_slice(
-                            pitch.nasal,
-                            pitch.nasal_count,
-                            "pitch nasal markers",
-                        )?
-                        .to_vec(),
-                        devoice: checked_slice(
-                            pitch.devoice,
-                            pitch.devoice_count,
-                            "pitch devoice markers",
-                        )?
-                        .to_vec(),
+                        position: pitch.position(),
+                        pattern: copy_bounded_str(pitch.pattern(), "pitch pattern", budget)?,
+                        nasal: pitch.nasal().to_vec(),
+                        devoice: pitch.devoice().to_vec(),
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            let transcriptions = checked_slice(
-                entry.transcriptions,
-                entry.transcriptions_count,
-                "pitch transcriptions",
-            )?
-            .iter()
-            .map(|transcription| {
-                copy_hd_string_bounded(*transcription, "pitch transcription", budget)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+            let transcriptions = entry
+                .transcriptions()
+                .map(|transcription| copy_bounded_str(transcription, "pitch transcription", budget))
+                .collect::<Result<Vec<_>, String>>()?;
             Ok(LookupPitchEntry {
-                dictionary: copy_hd_string_bounded(entry.dict_name, "pitch dictionary", budget)?,
+                dictionary: copy_bounded_str(entry.dict_name(), "pitch dictionary", budget)?,
                 pitches,
                 transcriptions,
             })
@@ -1336,124 +1220,34 @@ unsafe fn copy_pitch_entries(
         .collect()
 }
 
-/// Bridge the crate's borrowed frequency slices into the raw `(ptr, len)`
-/// shim structs the copy helpers validate, then copy under the GSM budget.
+/// Convert the crate's borrowed dictionary styles into GSM's owned models.
 ///
-/// The crate returns `&[FrequencyEntry]` (each wrapping a `&[Frequency]`) whose
-/// backing store lives for as long as the `Results` object the caller holds.
-/// We rebuild the flat `Hd*` view over those same borrows and run the existing
-/// `copy_frequency_entries`, so the UTF-8/per-field/aggregate limits and the
-/// verbatim value/display-value semantics stay in exactly one place (and stay
-/// unit-tested against the raw shim).
-fn bridge_frequency_entries(
-    entries: &[hoshidicts::FrequencyEntry],
-    budget: &mut usize,
-) -> Result<Vec<LookupFrequencyEntry>, String> {
-    // Keep the per-entry `Hd*` slices alive for the duration of the copy: the
-    // outer `HdFrequencyEntry` borrows a pointer into `nested`.
-    let nested: Vec<Vec<HdFrequency>> = entries
-        .iter()
-        .map(|entry| {
-            entry
-                .frequencies()
-                .iter()
-                .map(|frequency| HdFrequency {
-                    value: frequency.value(),
-                    display_value: HdStr::borrow(frequency.display_value()),
-                })
-                .collect()
-        })
-        .collect();
-    let shims: Vec<HdFrequencyEntry> = entries
-        .iter()
-        .zip(nested.iter())
-        .map(|(entry, values)| HdFrequencyEntry {
-            dict_name: HdStr::borrow(entry.dict_name()),
-            frequencies: values.as_ptr(),
-            frequencies_count: values.len(),
-        })
-        .collect();
-    unsafe { copy_frequency_entries(shims.as_ptr(), shims.len(), budget) }
-}
-
-/// Bridge the crate's borrowed pitch slices into the raw shim the copy helper
-/// validates. See `bridge_frequency_entries` for the lifetime/limits rationale.
-fn bridge_pitch_entries(
-    entries: &[hoshidicts::PitchEntry],
-    budget: &mut usize,
-) -> Result<Vec<LookupPitchEntry>, String> {
-    let nested_pitches: Vec<Vec<HdPitch>> = entries
-        .iter()
-        .map(|entry| {
-            entry
-                .pitches()
-                .iter()
-                .map(|pitch| {
-                    let nasal = pitch.nasal();
-                    let devoice = pitch.devoice();
-                    HdPitch {
-                        position: pitch.position(),
-                        pattern: HdStr::borrow(pitch.pattern()),
-                        nasal: nasal.as_ptr(),
-                        nasal_count: nasal.len(),
-                        devoice: devoice.as_ptr(),
-                        devoice_count: devoice.len(),
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    let nested_transcriptions: Vec<Vec<HdStr>> = entries
-        .iter()
-        .map(|entry| entry.transcriptions().map(HdStr::borrow).collect())
-        .collect();
-    let shims: Vec<HdPitchEntry> = entries
-        .iter()
-        .zip(nested_pitches.iter())
-        .zip(nested_transcriptions.iter())
-        .map(|((entry, pitches), transcriptions)| HdPitchEntry {
-            dict_name: HdStr::borrow(entry.dict_name()),
-            pitches: pitches.as_ptr(),
-            pitches_count: pitches.len(),
-            transcriptions: transcriptions.as_ptr(),
-            transcriptions_count: transcriptions.len(),
-        })
-        .collect();
-    unsafe { copy_pitch_entries(shims.as_ptr(), shims.len(), budget) }
-}
-
-/// Bridge the crate's borrowed dictionary-style slice into the raw shim the
-/// copy helper validates. See `bridge_frequency_entries` for the rationale.
-fn bridge_dictionary_styles(
+/// Each field is bounded by its per-field cap (reader.js applies the same
+/// per-entry and aggregate caps again on the way in), and the entry count is
+/// held to the dictionary limit.
+fn dictionary_styles(
     styles: &[hoshidicts::DictionaryStyle],
 ) -> Result<Vec<DictionaryStyle>, String> {
-    let shims: Vec<HdDictionaryStyle> = styles
+    if styles.len() > MAX_DICTIONARIES {
+        return Err("native Hoshidicts returned too many dictionary styles".into());
+    }
+    styles
         .iter()
-        .map(|style| HdDictionaryStyle {
-            dict_name: HdStr::borrow(style.dict_name()),
-            styles: HdStr::borrow(style.styles()),
+        .map(|style| {
+            Ok(DictionaryStyle {
+                dictionary: bound_str(
+                    style.dict_name(),
+                    "style dictionary",
+                    MAX_STYLE_DICTIONARY_BYTES,
+                )?,
+                styles: bound_str(
+                    style.styles(),
+                    "dictionary stylesheet",
+                    MAX_DICTIONARY_STYLE_BYTES,
+                )?,
+            })
         })
-        .collect();
-    unsafe { copy_dictionary_styles(shims.as_ptr(), shims.len()) }
-}
-
-/// Safe call-site wrapper: copy a crate-borrowed `&str` under the aggregate
-/// budget and the default per-field byte cap. The crate hands back a real,
-/// already-length-delimited `&str`, so building the `(ptr, len)` view and
-/// running the unit-tested `copy_hd_string_bounded` over it is sound.
-fn copy_bounded_str(value: &str, label: &str, budget: &mut usize) -> Result<String, String> {
-    unsafe { copy_hd_string_bounded(HdStr::borrow(value), label, budget) }
-}
-
-/// Safe call-site wrapper for `copy_hd_string_bounded_with_limit`; see
-/// `copy_bounded_str` for the soundness rationale.
-fn copy_bounded_str_with_limit(
-    value: &str,
-    label: &str,
-    budget: &mut usize,
-    maximum_bytes: usize,
-) -> Result<String, String> {
-    unsafe { copy_hd_string_bounded_with_limit(HdStr::borrow(value), label, budget, maximum_bytes) }
+        .collect()
 }
 
 /// Map GSM's `LookupOptions` to the crate's `LookupFrequencyOrder`, mirroring
@@ -2203,7 +1997,6 @@ async fn reload_payload(
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::ptr;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use zip::write::SimpleFileOptions;
@@ -2211,14 +2004,6 @@ mod tests {
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(1);
     const TEST_PNG: &[u8] =
         b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x03\x08\x06\0\0\0\0\0\0\0";
-
-    /// Borrow test bytes as the native string view the C API hands back.
-    fn hd_str(bytes: &[u8]) -> HdStr {
-        HdStr {
-            ptr: bytes.as_ptr().cast::<c_char>(),
-            len: bytes.len(),
-        }
-    }
 
     fn test_avif(width: u32, height: u32) -> Vec<u8> {
         let mut data = Vec::new();
@@ -2729,21 +2514,22 @@ mod tests {
         assert_eq!(MAX_GLOSSARY_BYTES, 8 * 1024 * 1024);
         assert_eq!(MAX_LOOKUP_RESPONSE_BYTES, 32 * 1024 * 1024);
 
+        // A single field larger than its per-field cap is rejected before the
+        // copy, and an empty field copies to an empty String.
         let mut glossary_budget = 0usize;
-        let oversized_glossary = HdStr {
-            ptr: ptr::NonNull::<c_char>::dangling().as_ptr(),
-            len: MAX_GLOSSARY_BYTES + 1,
-        };
-        assert!(unsafe {
-            copy_hd_string_bounded_with_limit(
-                oversized_glossary,
-                "glossary content",
-                &mut glossary_budget,
-                MAX_GLOSSARY_BYTES,
-            )
-        }
+        let oversized_glossary = "x".repeat(MAX_GLOSSARY_BYTES + 1);
+        assert!(copy_bounded_str_with_limit(
+            &oversized_glossary,
+            "glossary content",
+            &mut glossary_budget,
+            MAX_GLOSSARY_BYTES,
+        )
         .expect_err("per-glossary byte limit must fail")
         .contains("permitted size"));
+        assert_eq!(
+            copy_bounded_str("", "empty field", &mut 0usize).expect("empty copy"),
+            String::new()
+        );
 
         // The aggregate cap accumulates across copies and rejects the one that
         // would cross it.
@@ -2756,70 +2542,28 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_style_copy_enforces_count_and_per_style_limits() {
-        unsafe {
-            assert!(copy_dictionary_styles(ptr::null(), MAX_DICTIONARIES + 1)
-                .expect_err("style count limit must fail")
-                .contains("too many dictionary styles"));
-        }
-
-        let oversized_css = vec![b'x'; MAX_DICTIONARY_STYLE_BYTES + 1];
-        let oversized = [HdDictionaryStyle {
-            dict_name: hd_str(b"Test"),
-            styles: hd_str(&oversized_css),
-        }];
-        unsafe {
-            assert!(copy_dictionary_styles(oversized.as_ptr(), oversized.len())
-                .expect_err("per-style limit must fail")
-                .contains("stylesheet exceeds the permitted size"));
-        }
-    }
-
-    #[test]
-    fn frequencies_copy_values_and_display_values_verbatim() {
-        // Native display values are always present; an archive that omits one
-        // gets it synthesised from the numeric value during import.
-        let values = [
-            HdFrequency {
-                value: 1,
-                display_value: hd_str("1㋕".as_bytes()),
-            },
-            HdFrequency {
-                value: 7,
-                display_value: hd_str(b""),
-            },
-        ];
-        let entries = [HdFrequencyEntry {
-            dict_name: hd_str(b"Frequency Test"),
-            frequencies: values.as_ptr(),
-            frequencies_count: values.len(),
-        }];
-
-        let copied = unsafe {
-            copy_frequency_entries(entries.as_ptr(), entries.len(), &mut 0usize)
-                .expect("valid frequencies")
-        };
-        assert_eq!(
-            copied,
-            vec![LookupFrequencyEntry {
-                dictionary: "Frequency Test".into(),
-                frequencies: vec![
-                    LookupFrequency {
-                        value: 1,
-                        display_value: "1㋕".into(),
-                    },
-                    LookupFrequency {
-                        value: 7,
-                        display_value: String::new(),
-                    },
-                ],
-            }]
-        );
-
-        let json = serde_json::to_value(&copied).expect("serialize frequencies");
-        assert_eq!(json[0]["frequencies"][0]["displayValue"], "1㋕");
-        assert_eq!(json[0]["frequencies"][0]["value"], 1);
-        assert_eq!(json[0]["frequencies"][1]["displayValue"], "");
+    fn dictionary_style_field_cap_rejects_oversized_stylesheets() {
+        // Dictionary styles are bounded per field only (they are not part of a
+        // lookup response). The end-to-end styles path is exercised by
+        // ffi_dictionary_styles_are_owned_and_generation_checked and
+        // styles_response_rejects_json_escape_expansion; this pins the byte cap
+        // that `dictionary_styles` applies to each field.
+        let oversized_css = "x".repeat(MAX_DICTIONARY_STYLE_BYTES + 1);
+        assert!(bound_str(
+            &oversized_css,
+            "dictionary stylesheet",
+            MAX_DICTIONARY_STYLE_BYTES
+        )
+        .expect_err("per-style limit must fail")
+        .contains("stylesheet exceeds the permitted size"));
+        let oversized_name = "x".repeat(MAX_STYLE_DICTIONARY_BYTES + 1);
+        assert!(bound_str(
+            &oversized_name,
+            "style dictionary",
+            MAX_STYLE_DICTIONARY_BYTES
+        )
+        .expect_err("per-name limit must fail")
+        .contains("dictionary exceeds the permitted size"));
     }
 
     #[test]
