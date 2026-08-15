@@ -2747,6 +2747,36 @@ describe("Hoshidicts dictionary tabs", () => {
     expect(feedback.nextElementSibling).toBe(chrome);
   });
 
+  it("keeps a vertical popup's toolbar at the top instead of flipping it beside the word", async () => {
+    const { dom, first, lookup } = createLookupHarness({
+      dictionaryPresentation: [{ title: "Main", favorite: true }],
+      popupToolbarPosition: "auto"
+    });
+
+    // Vertical Japanese text opens the popup BESIDE the word, not above or
+    // below it, so the opposite-side flip does not apply: the toolbar keeps its
+    // configured (default top) position rather than being pushed to the bottom.
+    first.setAttribute("style", "writing-mode: vertical-rl");
+    expect(
+      dom.window.getComputedStyle(first).writingMode.startsWith("vertical")
+    ).toBe(true);
+
+    // Anchor near the viewport bottom: a horizontal popup here would open above
+    // the word and flip its toolbar to the bottom. The vertical popup must not.
+    setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
+    const { popup } = await lookup((requestId) =>
+      lookupResultWithDictionaries(requestId, [
+        { dictionary: "Main", glossary: "beside the word" }
+      ])
+    );
+
+    expect(popup.dataset.toolbarPosition).toBe("top");
+    const chrome = popup.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-result-chrome"
+    )!;
+    expect(popup.firstElementChild).toBe(chrome);
+  });
+
   it("shows short, accessible glossary dictionary tabs without changing their identity", async () => {
     const { lookup, reader } = createLookupHarness();
     const { popup } = await lookup((requestId) => {
@@ -6341,6 +6371,58 @@ describe("Hoshidicts Shift-hover scanner", () => {
 
     expect(childPopup.style.top).not.toBe(originalTop);
     expect(childPopup.style.top).toBe("140px");
+  });
+
+  it("keeps a nested child popup's toolbar at the top regardless of where it opens", async () => {
+    const { dom, first, reader, socket } = createReaderHarness({
+      lookupMode: "hover",
+      popupNestingMaxDepth: 1,
+      popupToolbarPosition: "auto",
+    });
+
+    // The root popup opens above the word (anchored near the viewport bottom),
+    // so its toolbar correctly flips to the bottom.
+    setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
+    await hover(dom, first);
+    const rootRequest = lastRequest(socket);
+    socket.receive(lookupResult(rootRequest.requestId, "食べる", "食事"));
+    const rootPopup = reader.getPopupElement();
+    expect(rootPopup.dataset.toolbarPosition).toBe("bottom");
+
+    // Opening a child popup from a definition anchors it BESIDE its parent, not
+    // above/below the word, so the opposite-side flip never applies to nested
+    // popups: the child keeps its configured (default top) toolbar.
+    const definition = rootPopup.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-glossary-content"
+    )!;
+    vi.spyOn(definition, "getBoundingClientRect").mockReturnValue({
+      x: 40,
+      y: 700,
+      left: 40,
+      top: 700,
+      right: 100,
+      bottom: 720,
+      width: 60,
+      height: 20,
+      toJSON: () => ({})
+    } as DOMRect);
+    const caret = dom.window.document.createRange();
+    caret.setStart(definition.firstChild!, 0);
+    caret.collapse(true);
+    Object.defineProperty(dom.window.document, "caretRangeFromPoint", {
+      configurable: true,
+      value: vi.fn(() => caret.cloneRange())
+    });
+    await hover(dom, definition, { clientX: 40, clientY: 700 });
+    const childRequest = lastRequest(socket);
+    socket.receive(lookupResult(childRequest.requestId, "食事", "meal"));
+
+    const childPopup = reader.getPopupElements()[1];
+    expect(childPopup).toBeTruthy();
+    expect(childPopup.dataset.toolbarPosition).toBe("top");
+    expect(childPopup.firstElementChild?.classList.contains(
+      "gsm-hoshidicts-result-chrome"
+    )).toBe(true);
   });
 
   it("ignores a stale child response without replacing its parent", async () => {
