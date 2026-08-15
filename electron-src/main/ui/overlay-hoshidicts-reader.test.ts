@@ -5821,6 +5821,10 @@ describe("Hoshidicts Shift-hover scanner", () => {
     expect(first.classList.contains("gsm-hoshidicts-source-match")).toBe(true);
     expect(definition.classList.contains("gsm-hoshidicts-source-match")).toBe(true);
 
+    dispatchMouse(dom, rootPopup, "mousemove", { clientX: 200, clientY: 200 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(reader.getPopupElements()).toHaveLength(2);
+
     dispatchMouse(dom, dom.window.document.body, "mousemove", { clientX: 200, clientY: 200 });
     await vi.advanceTimersByTimeAsync(299);
     reader.getPopupElements()[1].dispatchEvent(new dom.window.Event("pointerenter"));
@@ -6065,12 +6069,7 @@ describe("Hoshidicts Shift-hover scanner", () => {
       .hoshidictsDepth).toBe("1");
     expect(childSync[1]).toEqual({ autoPlay: true });
 
-    rootPopup.querySelector<HTMLElement>(".gsm-hoshidicts-entry-header")!
-      .dispatchEvent(new dom.window.MouseEvent("mousemove", {
-        bubbles: true,
-        clientX: 40,
-        clientY: 40
-      }));
+    reader.updatePreferences({ popupNestingMaxDepth: 0 });
     const parentSync = audioController.setRenderedResults.mock.calls.at(-1)!;
     expect(reader.getPopupElements()).toEqual([rootPopup]);
     expect(parentSync[0]).toHaveLength(1);

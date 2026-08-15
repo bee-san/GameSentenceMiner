@@ -4993,7 +4993,7 @@
         } else {
           clearHoveredSource();
           invalidateLookup();
-          schedulePruneFromDepth(targetDepth, "ancestor-hovered");
+          clearDescendantHideTimer();
         }
         return;
       }
