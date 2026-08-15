@@ -45,12 +45,12 @@ const MAX_KANJI_STATS_PER_ENTRY: usize = 128;
 const MAX_ARCHIVE_INDEX_BYTES: u64 = 1024 * 1024;
 const MAX_MEDIA_RECORDS: u64 = 1_000_000;
 const REQUIRED_DICTIONARY_FILES: [&str; 3] = ["hash.table", "bloom.filter", "blobs.bin"];
-const HOSHIDICTS_MARKERS: [&str; 4] = [
-    ".hoshidicts_4",
-    ".hoshidicts_3",
-    ".hoshidicts_2",
-    ".hoshidicts_1",
-];
+// The upstream hoshidicts engine reads and writes the `.hoshidicts_3` marker.
+// The fork-only `.hoshidicts_4` marker is intentionally absent: the upstream
+// engine cannot read a `.hoshidicts_4` directory, so accepting it here would
+// silently load a dictionary the engine skips. GSM refuses it instead, forcing
+// a clear "missing format marker" diagnostic and a manual re-import.
+const HOSHIDICTS_MARKERS: [&str; 3] = [".hoshidicts_3", ".hoshidicts_2", ".hoshidicts_1"];
 
 /// Native string view: a borrowed `(ptr, len)` byte span handed back by the
 /// hoshidicts crate's accessors. GSM copies out of it under the service lock,
@@ -2940,12 +2940,9 @@ mod tests {
 
         fs::write(dictionary.join(".hoshidicts_4"), []).expect("write v4 marker");
         fs::remove_file(dictionary.join(".hoshidicts_3")).expect("remove v3 marker");
-        assert_eq!(
-            load_dictionary_specs(&root.0)
-                .expect("valid v4 manifest")
-                .len(),
-            1
-        );
+        assert!(load_dictionary_specs(&root.0)
+            .expect_err("a .hoshidicts_4-only directory the upstream engine cannot read must fail")
+            .contains("format marker"));
 
         fs::remove_file(dictionary.join(".hoshidicts_4")).expect("remove v4 marker");
         assert!(load_dictionary_specs(&root.0)
@@ -3332,7 +3329,17 @@ mod tests {
     }
 
     #[test]
-    fn imported_dictionary_redirects_are_followed_without_rendering_raw_tuples() {
+    fn imported_structured_glossaries_round_trip_verbatim_through_the_adapter() {
+        // Manhhao's upstream engine returns each term's glossary verbatim; it
+        // does not synthesise a separate "redirected from" result from a
+        // Yomitan structured-content redirect link the way the retired fork
+        // engine did. GSM owns none of that engine query semantics, so this
+        // test pins the boundary GSM *does* own: the safe crate slice for a
+        // structured-content glossary (a JSON array mixing an object and a raw
+        // tuple) round-trips byte-for-byte through the adapter's
+        // budget-claimed conversion without mangling, dropping, or re-ordering
+        // the structured content, and the redirect target stays independently
+        // queryable.
         let root = TestDir::new("redirect-lookup");
         let (mut service, report) =
             imported_service(&root.0, "Redirect Lookup", write_redirect_lookup_archive);
@@ -3340,41 +3347,43 @@ mod tests {
         assert!(root
             .0
             .join("Redirect Lookup")
-            .join(".hoshidicts_4")
+            .join(".hoshidicts_3")
             .is_file());
-        let results = service.lookup("喰べる").expect("redirect lookup");
+
+        let results = service.lookup("喰べる").expect("source lookup");
         let source = results
             .iter()
             .find(|result| result.term.expression == "喰べる")
-            .expect("source redirect-link result");
+            .expect("source structured-content result");
         assert_eq!(source.matched, "喰べる");
+        assert_eq!(source.term.glossaries.len(), 1);
+        // The adapter must hand the structured content back verbatim: a valid
+        // JSON array whose first element is the structured-content link object
+        // and whose second element is the raw form-of tuple, both preserved.
         let source_glossary: serde_json::Value =
             serde_json::from_str(&source.term.glossaries[0].glossary)
-                .expect("filtered source glossary JSON");
+                .expect("structured glossary is valid JSON");
+        let definitions = source_glossary
+            .as_array()
+            .expect("structured glossary is a definition array");
+        assert_eq!(definitions.len(), 2);
         assert_eq!(
-            source_glossary
-                .as_array()
-                .expect("source definitions")
-                .len(),
-            1
+            definitions[0]["type"].as_str(),
+            Some("structured-content"),
+            "the structured-content link element survives the conversion"
+        );
+        assert!(
+            definitions[1].is_array(),
+            "the raw form-of tuple survives the conversion untouched"
         );
 
-        let target = results
+        // The redirect target is a real imported term, queryable on its own.
+        let target = service.lookup("食べる").expect("direct target lookup");
+        let target_term = target
             .iter()
             .find(|result| result.term.expression == "食べる" && result.term.reading == "たべる")
-            .expect("redirect target result");
-        assert_eq!(target.matched, "喰べる");
-        assert_eq!(target.deinflected, "食べる");
-        assert_eq!(
-            target.trace.last().map(|step| step.name.as_str()),
-            Some("redirected from 喰べる")
-        );
-        assert!(target.term.glossaries[0].glossary.contains("to eat"));
-        assert!(results.iter().all(|result| result
-            .term
-            .glossaries
-            .iter()
-            .all(|glossary| !glossary.glossary.contains("[\"食べる\",["))));
+            .expect("target term is independently queryable");
+        assert!(target_term.term.glossaries[0].glossary.contains("to eat"));
     }
 
     #[test]
@@ -3551,7 +3560,11 @@ mod tests {
     }
 
     #[test]
-    fn native_kanji_query_rejects_oversized_materialization_before_ffi_copy() {
+    fn kanji_query_enforces_gsm_consumer_side_entry_cap() {
+        // The upstream engine has no entry guard of its own; it returns every
+        // kanji entry it holds. GSM's own consumer-side cap is what bounds the
+        // materialization, so the query succeeds at the engine and is rejected
+        // by MAX_KANJI_ENTRIES on our side before we copy the oversized result.
         let root = TestDir::new("bounded-native-kanji");
         let (mut service, _) = imported_service(&root.0, "Duplicate Kanji", |path| {
             write_test_archive_with_kanji_entries(
@@ -3564,8 +3577,8 @@ mod tests {
         assert_eq!(service.activate().expect("activate dictionary"), 1);
         assert!(service
             .lookup_kanji("食")
-            .expect_err("native query must enforce its entry budget")
-            .contains("native Hoshidicts kanji lookup failed"));
+            .expect_err("GSM must enforce its own kanji entry budget")
+            .contains("too many kanji entries"));
     }
 
     #[test]
