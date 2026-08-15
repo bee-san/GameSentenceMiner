@@ -50,6 +50,10 @@ _HOSHIDICTS_GATEWAY_BODY_LIMITS = {
     "/api/hoshidicts/mine": 64 * 1024 * 1024,
     "/api/hoshidicts/mining/check": 64 * 1024 * 1024,
     "/api/hoshidicts/mining/browse": 64 * 1024,
+    # Mirrors hoshidicts_api.MAX_LOOKUP_STATS_REQUEST_BYTES so the gateway
+    # rejects oversized lookup-stats POSTs (413) before an unbounded read,
+    # instead of forwarding the full body and relying on the Flask-layer cap.
+    "/api/hoshidicts/lookup-stats": 4 * 1024,
 }
 
 app = flask.Flask(__name__, static_folder="static", static_url_path="/static")
