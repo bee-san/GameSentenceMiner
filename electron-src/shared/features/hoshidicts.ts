@@ -197,11 +197,15 @@ export const DEFAULT_HOSHIDICTS_POPUP_OPACITY_PERCENT = 85;
 export const DEFAULT_HOSHIDICTS_POPUP_BACKDROP_BLUR_PX = 16;
 export const DEFAULT_HOSHIDICTS_CUSTOM_POPUP_CSS = '';
 export const MAX_HOSHIDICTS_CUSTOM_POPUP_CSS_LENGTH = 32 * 1024;
-export const HOSHIDICTS_POPUP_TOOLBAR_POSITIONS = ['top', 'bottom'] as const;
+export const HOSHIDICTS_POPUP_TOOLBAR_POSITIONS = [
+    'auto',
+    'top',
+    'bottom',
+] as const;
 export type HoshidictsPopupToolbarPosition =
     (typeof HOSHIDICTS_POPUP_TOOLBAR_POSITIONS)[number];
 export const DEFAULT_HOSHIDICTS_POPUP_TOOLBAR_POSITION: HoshidictsPopupToolbarPosition =
-    'top';
+    'auto';
 const HOSHIDICTS_POPUP_TOOLBAR_POSITION_SET = new Set<string>(
     HOSHIDICTS_POPUP_TOOLBAR_POSITIONS
 );

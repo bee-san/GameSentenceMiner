@@ -680,6 +680,7 @@
           "opacity": "背景の不透明度",
           "backdropBlur": "背景のぼかし",
           "toolbarPosition": "ツールバーの位置",
+          "toolbarPositionAuto": "自動",
           "toolbarPositionTop": "上",
           "toolbarPositionBottom": "下",
           "percent": "%",

@@ -1764,7 +1764,7 @@ describe("HoshidictsSettingsWindow", () => {
     ).toBe("Girlypop");
   });
 
-  it("auto-saves whether the popup toolbar is at the top or bottom", async () => {
+  it("defaults the popup toolbar to auto and saves fixed positions", async () => {
     vi.useFakeTimers();
     await render();
     await openDesign();
@@ -1772,13 +1772,14 @@ describe("HoshidictsSettingsWindow", () => {
       "#hoshidicts-popup-toolbar-position"
     );
 
-    expect(toolbarPosition?.value).toBe("top");
+    expect(toolbarPosition?.value).toBe("auto");
     expect(
       Array.from(toolbarPosition?.options ?? [], (option) => ({
         text: option.text.trim(),
         value: option.value
       }))
     ).toEqual([
+      { text: "Auto", value: "auto" },
       { text: "Top", value: "top" },
       { text: "Bottom", value: "bottom" }
     ]);

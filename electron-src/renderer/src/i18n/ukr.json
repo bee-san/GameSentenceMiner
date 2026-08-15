@@ -680,6 +680,7 @@
           "opacity": "Непрозорість тла",
           "backdropBlur": "Розмиття тла",
           "toolbarPosition": "Розташування панелі",
+          "toolbarPositionAuto": "Автоматично",
           "toolbarPositionTop": "Вгорі",
           "toolbarPositionBottom": "Внизу",
           "percent": "%",

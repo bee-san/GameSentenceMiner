@@ -3390,12 +3390,16 @@
             { width: windowRef.innerWidth, height: windowRef.innerHeight },
             { vertical: level.candidate.vertical }
           );
-      // The root popup's toolbar sits opposite its automatic placement: above
-      // the word -> toolbar bottom; below the word -> toolbar top. Vertical and
-      // nested popups position beside the word, so they keep the preference.
+      // In auto mode, the root popup's toolbar sits opposite its placement:
+      // above the word -> toolbar bottom; below the word -> toolbar top. Fixed
+      // preferences, vertical text, and nested side popups keep their position.
       // Only re-apply when it actually changes, so a no-op reposition never
       // reorders the toolbar out from under a focused control.
-      if (level.view && (position.placement === "above" || position.placement === "below")) {
+      if (
+        preferences.popupToolbarPosition === "auto" &&
+        level.view &&
+        (position.placement === "above" || position.placement === "below")
+      ) {
         const desiredToolbar = position.placement === "above" ? "bottom" : "top";
         if (level.popup.dataset.toolbarPosition !== desiredToolbar) {
           level.view.setToolbarPosition(desiredToolbar);

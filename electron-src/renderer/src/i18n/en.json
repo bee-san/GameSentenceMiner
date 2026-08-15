@@ -687,6 +687,7 @@
           "opacity": "Background opacity",
           "backdropBlur": "Backdrop blur",
           "toolbarPosition": "Toolbar position",
+          "toolbarPositionAuto": "Auto",
           "toolbarPositionTop": "Top",
           "toolbarPositionBottom": "Bottom",
           "percent": "%",

@@ -2507,7 +2507,8 @@ describe("Hoshidicts dictionary tabs", () => {
 
   it("places the toolbar opposite the root popup's automatic placement", async () => {
     const { first, lookup, reader } = createLookupHarness({
-      dictionaryPresentation: [{ title: "Main", favorite: true }]
+      dictionaryPresentation: [{ title: "Main", favorite: true }],
+      popupToolbarPosition: "auto"
     });
 
     // Anchor near the bottom of the viewport: the popup fits above the word,
@@ -2530,6 +2531,32 @@ describe("Hoshidicts dictionary tabs", () => {
     );
     expect(popup.dataset.toolbarPosition).toBe("top");
   });
+
+  it.each(["top", "bottom"])(
+    "keeps a fixed %s toolbar when the root popup changes sides",
+    async (popupToolbarPosition) => {
+      const { first, lookup, reader } = createLookupHarness({
+        dictionaryPresentation: [{ title: "Main", favorite: true }],
+        popupToolbarPosition
+      });
+
+      setRect(first, { left: 10, top: 700, right: 30, bottom: 720 });
+      const { popup } = await lookup((requestId) =>
+        lookupResultWithDictionaries(requestId, [
+          { dictionary: "Main", glossary: "fixed toolbar" }
+        ])
+      );
+      expect(popup.dataset.toolbarPosition).toBe(popupToolbarPosition);
+
+      setRect(first, { left: 10, top: 10, right: 30, bottom: 30 });
+      reader.getPopupElement().ownerDocument.defaultView!.dispatchEvent(
+        new (reader.getPopupElement().ownerDocument.defaultView as any).Event(
+          "resize"
+        )
+      );
+      expect(popup.dataset.toolbarPosition).toBe(popupToolbarPosition);
+    }
+  );
 
   it("moves the complete toolbar to the bottom live and keeps its Note form positioned", async () => {
     const { first, lookup, reader } = createLookupHarness({
