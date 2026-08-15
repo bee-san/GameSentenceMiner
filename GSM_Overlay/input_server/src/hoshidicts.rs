@@ -1,12 +1,14 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use hoshidicts::{
+    Deinflector, LookupFrequencyOrder, LookupOptions as CrateLookupOptions, OwnedLookup, Query,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{c_char, c_int, CStr, CString};
+use std::ffi::{c_char, c_int};
 use std::fs;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
-use std::ptr;
 use std::slice;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
@@ -50,35 +52,10 @@ const HOSHIDICTS_MARKERS: [&str; 4] = [
     ".hoshidicts_1",
 ];
 
-/// Opaque native handle: only ever held behind a pointer.
-macro_rules! hd_opaque {
-    ($($name:ident),+ $(,)?) => {
-        $(
-            #[repr(C)]
-            struct $name {
-                _private: [u8; 0],
-            }
-        )+
-    };
-}
-
-hd_opaque!(
-    HdImportResult,
-    HdDeinflector,
-    HdQuery,
-    HdLookup,
-    HdLookupResults,
-    HdKanjiResults,
-    HdStyles,
-);
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdMediaFile {
-    data: *const u8,
-    size: usize,
-}
-
+/// Native string view: a borrowed `(ptr, len)` byte span handed back by the
+/// hoshidicts crate's accessors. GSM copies out of it under the service lock,
+/// enforcing its own UTF-8, per-field, and aggregate byte budgets rather than
+/// trusting the borrowed slice, so this stays a plain `(ptr, len)` pair.
 #[derive(Clone, Copy)]
 #[repr(C)]
 struct HdStr {
@@ -86,44 +63,23 @@ struct HdStr {
     len: usize,
 }
 
-fn optional_hd_string(value: Option<&str>) -> HdStr {
-    match value {
-        Some(value) => HdStr {
+impl HdStr {
+    /// Borrow a native `&str` (already length-delimited by the crate) as the
+    /// `(ptr, len)` view the copy helpers validate and bound.
+    fn borrow(value: &str) -> Self {
+        Self {
             ptr: value.as_ptr().cast(),
             len: value.len(),
-        },
-        None => HdStr {
-            ptr: ptr::null(),
-            len: 0,
-        },
+        }
     }
 }
 
 #[derive(Clone, Copy)]
-#[repr(C)]
-struct HdDictionaryStyle {
-    dict_name: HdStr,
-    styles: HdStr,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdGlossaryEntry {
-    dict_name: HdStr,
-    glossary: HdStr,
-    definition_tags: HdStr,
-    term_tags: HdStr,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
 struct HdFrequency {
     value: i32,
     display_value: HdStr,
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
 struct HdFrequencyEntry {
     dict_name: HdStr,
     frequencies: *const HdFrequency,
@@ -131,7 +87,6 @@ struct HdFrequencyEntry {
 }
 
 #[derive(Clone, Copy)]
-#[repr(C)]
 struct HdPitch {
     position: i32,
     pattern: HdStr,
@@ -141,8 +96,6 @@ struct HdPitch {
     devoice_count: usize,
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
 struct HdPitchEntry {
     dict_name: HdStr,
     pitches: *const HdPitch,
@@ -152,127 +105,9 @@ struct HdPitchEntry {
 }
 
 #[derive(Clone, Copy)]
-#[repr(C)]
-struct HdTermResult {
-    expression: HdStr,
-    reading: HdStr,
-    rules: HdStr,
-    score: i32,
-    glossaries: *const HdGlossaryEntry,
-    glossaries_count: usize,
-    frequencies: *const HdFrequencyEntry,
-    frequencies_count: usize,
-    pitches: *const HdPitchEntry,
-    pitches_count: usize,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdTransformGroup {
-    name: HdStr,
-    description: HdStr,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdLookupResult {
-    matched: HdStr,
-    deinflected: HdStr,
-    trace: *const HdTransformGroup,
-    trace_count: usize,
-    term: HdTermResult,
-    preprocessor_steps: i32,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdLookupOptions {
-    primary_reading: HdStr,
-    frequency_dictionary: HdStr,
-    frequency_order: i32,
-}
-
-const HD_LOOKUP_FREQUENCY_ORDER_ASCENDING: i32 = 1;
-const HD_LOOKUP_FREQUENCY_ORDER_DESCENDING: i32 = 2;
-const HD_LOOKUP_FREQUENCY_ORDER_DISABLED: i32 = 3;
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdKanjiStat {
-    key: HdStr,
-    value: HdStr,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct HdKanjiEntry {
+struct HdDictionaryStyle {
     dict_name: HdStr,
-    onyomi: HdStr,
-    kunyomi: HdStr,
-    tags: HdStr,
-    definitions: *const HdStr,
-    definitions_count: usize,
-    stats: *const HdKanjiStat,
-    stats_count: usize,
-}
-
-extern "C" {
-    fn hd_import(
-        zip_path: *const c_char,
-        output_dir: *const c_char,
-        low_ram: c_int,
-    ) -> *mut HdImportResult;
-    fn hd_import_result_free(result: *mut HdImportResult);
-    fn hd_import_result_success(result: *const HdImportResult) -> c_int;
-    fn hd_import_result_title(result: *const HdImportResult) -> *const c_char;
-    fn hd_import_result_term_count(result: *const HdImportResult) -> u64;
-    fn hd_import_result_meta_count(result: *const HdImportResult) -> u64;
-    fn hd_import_result_freq_count(result: *const HdImportResult) -> u64;
-    fn hd_import_result_pitch_count(result: *const HdImportResult) -> u64;
-    fn hd_import_result_kanji_count(result: *const HdImportResult) -> u64;
-    fn hd_import_result_media_count(result: *const HdImportResult) -> u64;
-    fn hd_import_result_error(result: *const HdImportResult) -> *const c_char;
-
-    fn hd_deinflector_new() -> *mut HdDeinflector;
-    fn hd_deinflector_free(deinflector: *mut HdDeinflector);
-
-    fn hd_query_new() -> *mut HdQuery;
-    fn hd_query_free(query: *mut HdQuery);
-    fn hd_query_add_term_dict(query: *mut HdQuery, path: *const c_char) -> c_int;
-    fn hd_query_add_freq_dict(query: *mut HdQuery, path: *const c_char) -> c_int;
-    fn hd_query_add_pitch_dict(query: *mut HdQuery, path: *const c_char) -> c_int;
-    fn hd_query_add_kanji_dict(query: *mut HdQuery, path: *const c_char) -> c_int;
-    fn hd_query_run_kanji(
-        query: *const HdQuery,
-        kanji: *const c_char,
-        out_entries: *mut *const HdKanjiEntry,
-        out_count: *mut usize,
-    ) -> *mut HdKanjiResults;
-    fn hd_kanji_results_free(results: *mut HdKanjiResults);
-    fn hd_query_get_media_file(
-        query: *const HdQuery,
-        dict_name: *const c_char,
-        media_path: *const c_char,
-    ) -> HdMediaFile;
-    fn hd_query_get_styles(
-        query: *const HdQuery,
-        out_styles: *mut *const HdDictionaryStyle,
-        out_count: *mut usize,
-    ) -> *mut HdStyles;
-    fn hd_styles_free(styles: *mut HdStyles);
-
-    fn hd_lookup_new(query: *mut HdQuery, deinflector: *mut HdDeinflector) -> *mut HdLookup;
-    fn hd_lookup_free(lookup: *mut HdLookup);
-    fn hd_lookup_run_with_options(
-        lookup: *const HdLookup,
-        lookup_string: *const c_char,
-        max_results: c_int,
-        scan_length: usize,
-        options: *const HdLookupOptions,
-        out_results: *mut *const HdLookupResult,
-        out_count: *mut usize,
-    ) -> *mut HdLookupResults;
-    fn hd_lookup_results_free(results: *mut HdLookupResults);
+    styles: HdStr,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -531,30 +366,6 @@ impl ImportReport {
     }
 }
 
-/// Owns one native result handle and releases it with its own free function.
-macro_rules! hd_owned {
-    ($($guard:ident($handle:ident) => $free:ident;)+) => {
-        $(
-            struct $guard(*mut $handle);
-
-            impl Drop for $guard {
-                fn drop(&mut self) {
-                    if !self.0.is_null() {
-                        unsafe { $free(self.0) };
-                    }
-                }
-            }
-        )+
-    };
-}
-
-hd_owned! {
-    ImportResultGuard(HdImportResult) => hd_import_result_free;
-    LookupResultsGuard(HdLookupResults) => hd_lookup_results_free;
-    KanjiResultsGuard(HdKanjiResults) => hd_kanji_results_free;
-    StylesGuard(HdStyles) => hd_styles_free;
-}
-
 #[derive(Debug, Deserialize)]
 struct ArchiveIndex {
     title: String,
@@ -616,20 +427,6 @@ fn validate_dictionary_title(title: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn path_to_c_string(path: &Path, label: &str) -> Result<CString, String> {
-    let utf8 = path
-        .to_str()
-        .ok_or_else(|| format!("{label} must be representable as UTF-8"))?;
-    CString::new(utf8).map_err(|_| format!("{label} contains an embedded NUL byte"))
-}
-
-unsafe fn copy_c_string(pointer: *const c_char, label: &str) -> Result<String, String> {
-    if pointer.is_null() {
-        return Err(format!("native {label} pointer was null"));
-    }
-    Ok(CStr::from_ptr(pointer).to_string_lossy().into_owned())
-}
-
 pub fn import_dictionary(archive_path: &Path, output_dir: &Path) -> ImportReport {
     let expected_title = match archive_dictionary_title(archive_path) {
         Ok(title) => title,
@@ -639,36 +436,28 @@ pub fn import_dictionary(archive_path: &Path, output_dir: &Path) -> ImportReport
         return ImportReport::failure(format!("failed to create import output directory: {error}"));
     }
 
-    let archive = match path_to_c_string(archive_path, "archive path") {
-        Ok(path) => path,
-        Err(error) => return ImportReport::failure(error),
-    };
-    let output = match path_to_c_string(output_dir, "output directory") {
-        Ok(path) => path,
-        Err(error) => return ImportReport::failure(error),
-    };
-
-    let pointer = unsafe { hd_import(archive.as_ptr(), output.as_ptr(), 1) };
-    if pointer.is_null() {
-        return ImportReport::failure("native dictionary import failed without a result");
-    }
-    let result = ImportResultGuard(pointer);
-
-    let title = unsafe { copy_c_string(hd_import_result_title(result.0), "import title") }
-        .unwrap_or_default();
-    let native_error = unsafe { copy_c_string(hd_import_result_error(result.0), "import error") }
-        .unwrap_or_else(|error| error);
-    let native_success = unsafe { hd_import_result_success(result.0) != 0 };
-    let mut report = ImportReport {
-        success: native_success,
-        title,
-        term_count: unsafe { hd_import_result_term_count(result.0) },
-        meta_count: unsafe { hd_import_result_meta_count(result.0) },
-        frequency_count: unsafe { hd_import_result_freq_count(result.0) },
-        pitch_count: unsafe { hd_import_result_pitch_count(result.0) },
-        kanji_count: unsafe { hd_import_result_kanji_count(result.0) },
-        media_count: unsafe { hd_import_result_media_count(result.0) },
-        error: native_error,
+    // The crate builds the archive/output paths, runs the native importer, and
+    // frees the native result before returning. `low_ram = true` matches the
+    // previous `hd_import(.., 1)` call.
+    let mut report = match hoshidicts::import(archive_path, output_dir, true) {
+        Ok(import) => ImportReport {
+            success: true,
+            title: import.title,
+            term_count: import.terms,
+            meta_count: import.meta,
+            frequency_count: import.freq,
+            pitch_count: import.pitch,
+            kanji_count: import.kanji,
+            media_count: import.media,
+            error: String::new(),
+        },
+        Err(hoshidicts::Error::Import(message)) => ImportReport::failure(message),
+        Err(hoshidicts::Error::InteriorNul) => {
+            ImportReport::failure("dictionary import path contains an embedded NUL byte")
+        }
+        Err(hoshidicts::Error::Failed) => {
+            ImportReport::failure("native dictionary import failed without a result")
+        }
     };
 
     if report.success && report.title != expected_title {
@@ -969,14 +758,13 @@ fn validate_native_media_files(dictionary_path: &Path, declared_count: u64) -> R
 
     let count = usize::try_from(declared_count)
         .map_err(|_| "dictionary media count cannot fit in memory".to_string())?;
-    let mut media_file = MediaValidationReader::new(fs::File::open(&media_path).map_err(
-        |error| {
+    let mut media_file =
+        MediaValidationReader::new(fs::File::open(&media_path).map_err(|error| {
             format!(
                 "failed to open dictionary media data {}: {error}",
                 media_path.display()
             )
-        },
-    )?);
+        })?);
     // The importer sorts these and writes them contiguously; re-deriving that
     // only re-checks our own writer. What matters is that every offset frames a
     // record inside media.bin, which is what query.cpp assumes.
@@ -1116,142 +904,86 @@ fn load_dictionary_specs(root: &Path) -> Result<Vec<DictionarySpec>, String> {
 }
 
 struct NativeEngine {
-    lookup: *mut HdLookup,
-    query: *mut HdQuery,
-    deinflector: *mut HdDeinflector,
+    // Owns the query and deinflector alongside the lookup so the three can live
+    // in one field. The crate's `OwnedLookup` is `Send` (serialized by the
+    // service mutex, like the raw handles were), so `NativeEngine` stays `Send`
+    // without a hand-written `unsafe impl`.
+    lookup: OwnedLookup,
     dictionary_count: usize,
 }
-
-// Hoshidicts has no thread affinity. Access to an engine is serialized by the
-// service mutex, and native result data is copied before that lock is released.
-unsafe impl Send for NativeEngine {}
 
 impl NativeEngine {
     fn load(root: &Path) -> Result<Self, String> {
         let dictionaries = load_dictionary_specs(root)?;
-        let query = unsafe { hd_query_new() };
-        if query.is_null() {
-            return Err("failed to create native Hoshidicts query".into());
-        }
-        let deinflector = unsafe { hd_deinflector_new() };
-        if deinflector.is_null() {
-            unsafe { hd_query_free(query) };
-            return Err("failed to create native Hoshidicts deinflector".into());
-        }
+        let mut query = Query::new();
 
         for dictionary in &dictionaries {
-            let path = match path_to_c_string(&dictionary.path, "dictionary path") {
-                Ok(path) => path,
-                Err(error) => {
-                    unsafe {
-                        hd_deinflector_free(deinflector);
-                        hd_query_free(query);
-                    }
-                    return Err(error);
-                }
-            };
-            let add = |name: &str,
-                       callback: unsafe extern "C" fn(*mut HdQuery, *const c_char) -> c_int|
-             -> Result<(), String> {
-                if unsafe { callback(query, path.as_ptr()) } == 0 {
-                    Ok(())
-                } else {
-                    Err(format!(
+            // Preserve the diagnostic that names the kind and directory. The
+            // crate collapses every failure to `Error::Failed`, so build the
+            // message from GSM's own context rather than the crate's error.
+            let add = |name: &str, result: Result<(), hoshidicts::Error>| -> Result<(), String> {
+                result.map_err(|_| {
+                    format!(
                         "native Hoshidicts rejected {name} dictionary {}",
                         dictionary.path.display()
-                    ))
-                }
+                    )
+                })
             };
             for kind in dictionary.query_kinds() {
-                let result = match kind {
-                    DictionaryKind::Term => add("term", hd_query_add_term_dict),
-                    DictionaryKind::Frequency => add("frequency", hd_query_add_freq_dict),
-                    DictionaryKind::Pitch => add("pitch", hd_query_add_pitch_dict),
-                    DictionaryKind::Kanji => add("kanji", hd_query_add_kanji_dict),
-                };
-                if let Err(error) = result {
-                    unsafe {
-                        hd_deinflector_free(deinflector);
-                        hd_query_free(query);
+                match kind {
+                    DictionaryKind::Term => add("term", query.add_term_dict(&dictionary.path))?,
+                    DictionaryKind::Frequency => {
+                        add("frequency", query.add_freq_dict(&dictionary.path))?
                     }
-                    return Err(error);
+                    DictionaryKind::Pitch => add("pitch", query.add_pitch_dict(&dictionary.path))?,
+                    DictionaryKind::Kanji => add("kanji", query.add_kanji_dict(&dictionary.path))?,
                 }
             }
-        }
-
-        let lookup = unsafe { hd_lookup_new(query, deinflector) };
-        if lookup.is_null() {
-            unsafe {
-                hd_deinflector_free(deinflector);
-                hd_query_free(query);
-            }
-            return Err("failed to create native Hoshidicts lookup".into());
         }
 
         Ok(Self {
-            lookup,
-            query,
-            deinflector,
+            lookup: OwnedLookup::new(query, Deinflector::new()),
             dictionary_count: dictionaries.len(),
         })
     }
 
     fn lookup(&self, text: &str, options: &LookupOptions) -> Result<Vec<LookupResult>, String> {
         validate_lookup_text(text)?;
-        let lookup_text =
-            CString::new(text).map_err(|_| "lookup text contains an embedded NUL byte")?;
-        let frequency_order = if options.sort_frequency_dictionary.is_none() {
-            HD_LOOKUP_FREQUENCY_ORDER_DISABLED
-        } else {
-            match options.sort_frequency_order {
-                LookupFrequencySortOrder::Ascending => HD_LOOKUP_FREQUENCY_ORDER_ASCENDING,
-                LookupFrequencySortOrder::Descending => HD_LOOKUP_FREQUENCY_ORDER_DESCENDING,
-            }
-        };
-        let native_options = HdLookupOptions {
-            primary_reading: optional_hd_string(options.primary_reading.as_deref()),
-            frequency_dictionary: optional_hd_string(options.sort_frequency_dictionary.as_deref()),
+        let frequency_order = crate_frequency_order(options);
+        // The crate treats an empty field as a null string; GSM already rejects
+        // empty primary_reading / sort dictionaries in `LookupOptions`, so the
+        // `Option<&str>` maps straight across.
+        let crate_options = CrateLookupOptions {
+            primary_reading: options.primary_reading.as_deref(),
+            frequency_dictionary: options.sort_frequency_dictionary.as_deref(),
             frequency_order,
         };
-        let mut result_pointer = ptr::null();
-        let mut result_count = 0usize;
-        let owned_results = unsafe {
-            hd_lookup_run_with_options(
-                self.lookup,
-                lookup_text.as_ptr(),
+        let results = self
+            .lookup
+            .run_with_options(
+                text,
                 options.max_results,
                 options.scan_length,
-                &native_options,
-                &mut result_pointer,
-                &mut result_count,
+                &crate_options,
             )
-        };
-        if owned_results.is_null() {
-            return Err("native Hoshidicts lookup failed".into());
-        }
-        let _owned_results = LookupResultsGuard(owned_results);
-        if result_count > options.max_results as usize {
+            .map_err(|_| "native Hoshidicts lookup failed".to_string())?;
+        let native_results = results.results();
+        if native_results.len() > options.max_results as usize {
             return Err("native Hoshidicts returned too many lookup results".into());
         }
-        let native_results =
-            unsafe { checked_slice(result_pointer, result_count, "lookup results")? };
 
         let mut copy_budget = 0usize;
         native_results
             .iter()
-            .map(|result| unsafe {
-                let trace_count = result.trace_count.min(MAX_TRACE_STEPS);
-                let trace = checked_slice(result.trace, trace_count, "deinflection trace")?
+            .map(|result| {
+                let trace_count = result.trace().len().min(MAX_TRACE_STEPS);
+                let trace = result.trace()[..trace_count]
                     .iter()
                     .map(|step| {
                         Ok(LookupTrace {
-                            name: copy_hd_string_bounded(
-                                step.name,
-                                "trace name",
-                                &mut copy_budget,
-                            )?,
-                            description: copy_hd_string_bounded(
-                                step.description,
+                            name: copy_bounded_str(step.name(), "trace name", &mut copy_budget)?,
+                            description: copy_bounded_str(
+                                step.description(),
                                 "trace description",
                                 &mut copy_budget,
                             )?,
@@ -1259,83 +991,70 @@ impl NativeEngine {
                     })
                     .collect::<Result<Vec<_>, String>>()?;
 
-                let glossaries = checked_slice(
-                    result.term.glossaries,
-                    result.term.glossaries_count,
-                    "glossaries",
-                )?
-                .iter()
-                .map(|glossary| {
-                    Ok(LookupGlossary {
-                        dictionary: copy_hd_string_bounded(
-                            glossary.dict_name,
-                            "glossary dictionary",
-                            &mut copy_budget,
-                        )?,
-                        glossary: copy_hd_string_bounded_with_limit(
-                            glossary.glossary,
-                            "glossary content",
-                            &mut copy_budget,
-                            MAX_GLOSSARY_BYTES,
-                        )?,
-                        definition_tags: copy_hd_string_bounded(
-                            glossary.definition_tags,
-                            "definition tags",
-                            &mut copy_budget,
-                        )?,
-                        term_tags: copy_hd_string_bounded(
-                            glossary.term_tags,
-                            "term tags",
-                            &mut copy_budget,
-                        )?,
+                let glossaries = result
+                    .term()
+                    .glossaries()
+                    .iter()
+                    .map(|glossary| {
+                        Ok(LookupGlossary {
+                            dictionary: copy_bounded_str(
+                                glossary.dict_name(),
+                                "glossary dictionary",
+                                &mut copy_budget,
+                            )?,
+                            glossary: copy_bounded_str_with_limit(
+                                glossary.glossary(),
+                                "glossary content",
+                                &mut copy_budget,
+                                MAX_GLOSSARY_BYTES,
+                            )?,
+                            definition_tags: copy_bounded_str(
+                                glossary.definition_tags(),
+                                "definition tags",
+                                &mut copy_budget,
+                            )?,
+                            term_tags: copy_bounded_str(
+                                glossary.term_tags(),
+                                "term tags",
+                                &mut copy_budget,
+                            )?,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-                let frequencies = copy_frequency_entries(
-                    result.term.frequencies,
-                    result.term.frequencies_count,
-                    &mut copy_budget,
-                )?;
-                let pitches = copy_pitch_entries(
-                    result.term.pitches,
-                    result.term.pitches_count,
-                    &mut copy_budget,
-                )?;
+                    .collect::<Result<Vec<_>, String>>()?;
+                let frequencies =
+                    bridge_frequency_entries(result.term().frequencies(), &mut copy_budget)?;
+                let pitches = bridge_pitch_entries(result.term().pitches(), &mut copy_budget)?;
 
                 Ok(LookupResult {
-                    matched: copy_hd_string_bounded(
-                        result.matched,
-                        "matched text",
-                        &mut copy_budget,
-                    )?,
-                    deinflected: copy_hd_string_bounded(
-                        result.deinflected,
+                    matched: copy_bounded_str(result.matched(), "matched text", &mut copy_budget)?,
+                    deinflected: copy_bounded_str(
+                        result.deinflected(),
                         "deinflected text",
                         &mut copy_budget,
                     )?,
                     trace,
                     term: LookupTerm {
-                        expression: copy_hd_string_bounded(
-                            result.term.expression,
+                        expression: copy_bounded_str(
+                            result.term().expression(),
                             "term expression",
                             &mut copy_budget,
                         )?,
-                        reading: copy_hd_string_bounded(
-                            result.term.reading,
+                        reading: copy_bounded_str(
+                            result.term().reading(),
                             "term reading",
                             &mut copy_budget,
                         )?,
-                        rules: copy_hd_string_bounded(
-                            result.term.rules,
+                        rules: copy_bounded_str(
+                            result.term().rules(),
                             "term rules",
                             &mut copy_budget,
                         )?,
-                        score: result.term.score,
+                        score: result.term().score(),
                         glossaries,
                         frequencies,
                         pitches,
                     },
-                    preprocessor_steps: result.preprocessor_steps,
+                    preprocessor_steps: result.preprocessor_steps(),
                 })
             })
             .collect()
@@ -1343,78 +1062,59 @@ impl NativeEngine {
 
     fn lookup_kanji(&self, character: &str) -> Result<LookupKanji, String> {
         validate_lookup_text(character)?;
-        let kanji = CString::new(character)
-            .map_err(|_| "kanji lookup text contains an embedded NUL byte")?;
-        let mut entry_pointer = ptr::null();
-        let mut entry_count = 0usize;
-        let owned_results = unsafe {
-            hd_query_run_kanji(
-                self.query,
-                kanji.as_ptr(),
-                &mut entry_pointer,
-                &mut entry_count,
-            )
-        };
-        if owned_results.is_null() {
-            return Err("native Hoshidicts kanji lookup failed".into());
-        }
-        let _owned_results = KanjiResultsGuard(owned_results);
-        if entry_count > MAX_KANJI_ENTRIES {
+        let results = self
+            .lookup
+            .query()
+            .run_kanji(character)
+            .map_err(|_| "native Hoshidicts kanji lookup failed".to_string())?;
+        let native_entries = results.entries();
+        if native_entries.len() > MAX_KANJI_ENTRIES {
             return Err("native Hoshidicts returned too many kanji entries".into());
         }
         let mut copy_budget = 0usize;
-        let entries = unsafe { checked_slice(entry_pointer, entry_count, "kanji entries")? }
+        let entries = native_entries
             .iter()
-            .map(|entry| unsafe {
-                let definitions = checked_slice(
-                    entry.definitions,
-                    entry.definitions_count.min(MAX_KANJI_DEFINITIONS_PER_ENTRY),
-                    "kanji definitions",
-                )?
-                .iter()
-                .map(|definition| {
-                    copy_hd_string_bounded(*definition, "kanji definition", &mut copy_budget)
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-                let mut stats = checked_slice(
-                    entry.stats,
-                    entry.stats_count.min(MAX_KANJI_STATS_PER_ENTRY),
-                    "kanji stats",
-                )?
-                .iter()
-                .map(|stat| {
-                    Ok(LookupKanjiStat {
-                        name: copy_hd_string_bounded(
-                            stat.key,
-                            "kanji stat name",
-                            &mut copy_budget,
-                        )?,
-                        value: copy_hd_string_bounded(
-                            stat.value,
-                            "kanji stat value",
-                            &mut copy_budget,
-                        )?,
+            .map(|entry| {
+                let definitions = entry
+                    .definitions()
+                    .take(MAX_KANJI_DEFINITIONS_PER_ENTRY)
+                    .map(|definition| {
+                        copy_bounded_str(definition, "kanji definition", &mut copy_budget)
                     })
-                })
-                .collect::<Result<Vec<_>, String>>()?;
+                    .collect::<Result<Vec<_>, String>>()?;
+                let stats_slice = entry.stats();
+                let stat_count = stats_slice.len().min(MAX_KANJI_STATS_PER_ENTRY);
+                let mut stats = stats_slice[..stat_count]
+                    .iter()
+                    .map(|stat| {
+                        Ok(LookupKanjiStat {
+                            name: copy_bounded_str(
+                                stat.key(),
+                                "kanji stat name",
+                                &mut copy_budget,
+                            )?,
+                            value: copy_bounded_str(
+                                stat.value(),
+                                "kanji stat value",
+                                &mut copy_budget,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
                 stats.sort_by(|left, right| {
                     left.name
                         .cmp(&right.name)
                         .then_with(|| left.value.cmp(&right.value))
                 });
                 Ok(LookupKanjiEntry {
-                    dictionary: copy_hd_string_bounded(
-                        entry.dict_name,
+                    dictionary: copy_bounded_str(
+                        entry.dict_name(),
                         "kanji dictionary",
                         &mut copy_budget,
                     )?,
-                    onyomi: copy_hd_string_bounded(entry.onyomi, "kanji onyomi", &mut copy_budget)?,
-                    kunyomi: copy_hd_string_bounded(
-                        entry.kunyomi,
-                        "kanji kunyomi",
-                        &mut copy_budget,
-                    )?,
-                    tags: copy_hd_string_bounded(entry.tags, "kanji tags", &mut copy_budget)?,
+                    onyomi: copy_bounded_str(entry.onyomi(), "kanji onyomi", &mut copy_budget)?,
+                    kunyomi: copy_bounded_str(entry.kunyomi(), "kanji kunyomi", &mut copy_budget)?,
+                    tags: copy_bounded_str(entry.tags(), "kanji tags", &mut copy_budget)?,
                     definitions,
                     stats,
                 })
@@ -1429,54 +1129,32 @@ impl NativeEngine {
     /// The caller (`HoshidictsService::media`) validates the dictionary and path
     /// before the generation check, so both arrive already bounded.
     fn media(&self, dictionary: &str, path: &str) -> Result<MediaFile, MediaError> {
-        let dictionary = CString::new(dictionary).map_err(|_| MediaError::InvalidDictionary)?;
-        let path = CString::new(path).map_err(|_| MediaError::InvalidPath)?;
-        let native =
-            unsafe { hd_query_get_media_file(self.query, dictionary.as_ptr(), path.as_ptr()) };
-        if native.data.is_null() || native.size == 0 {
+        // The crate borrows a view into query-owned mmap data; copy it out
+        // before the service lock is released. `media_file` returns `None` both
+        // for a missing file and an interior NUL in the arguments.
+        let native = self
+            .lookup
+            .query()
+            .media_file(dictionary, path)
+            .ok_or(MediaError::NotFound)?;
+        if native.is_empty() {
             return Err(MediaError::NotFound);
         }
-        if native.size > MAX_MEDIA_BYTES {
+        if native.len() > MAX_MEDIA_BYTES {
             return Err(MediaError::MediaTooLarge);
         }
-
-        // The C API returns a view into query-owned mmap data. Copy it before
-        // returning so no borrowed native pointer escapes the serialized call.
-        let data = unsafe { slice::from_raw_parts(native.data, native.size) }.to_vec();
+        let data = native.to_vec();
         let media_type = media_type_for(&data)?;
         Ok(MediaFile { media_type, data })
     }
 
     fn styles(&self) -> Result<Vec<DictionaryStyle>, String> {
-        let mut styles_pointer = ptr::null();
-        let mut styles_count = 0usize;
-        let owned_styles =
-            unsafe { hd_query_get_styles(self.query, &mut styles_pointer, &mut styles_count) };
-        if owned_styles.is_null() {
-            return Err("native Hoshidicts dictionary styles lookup failed".into());
-        }
-        let _owned_styles = StylesGuard(owned_styles);
-        unsafe { copy_dictionary_styles(styles_pointer, styles_count) }
-    }
-}
-
-impl Drop for NativeEngine {
-    fn drop(&mut self) {
-        unsafe {
-            // Lookup borrows both dependencies, so it must be destroyed first.
-            if !self.lookup.is_null() {
-                hd_lookup_free(self.lookup);
-                self.lookup = ptr::null_mut();
-            }
-            if !self.query.is_null() {
-                hd_query_free(self.query);
-                self.query = ptr::null_mut();
-            }
-            if !self.deinflector.is_null() {
-                hd_deinflector_free(self.deinflector);
-                self.deinflector = ptr::null_mut();
-            }
-        }
+        let styles = self
+            .lookup
+            .query()
+            .styles()
+            .map_err(|_| "native Hoshidicts dictionary styles lookup failed".to_string())?;
+        bridge_dictionary_styles(styles.styles())
     }
 }
 
@@ -1656,6 +1334,142 @@ unsafe fn copy_pitch_entries(
             })
         })
         .collect()
+}
+
+/// Bridge the crate's borrowed frequency slices into the raw `(ptr, len)`
+/// shim structs the copy helpers validate, then copy under the GSM budget.
+///
+/// The crate returns `&[FrequencyEntry]` (each wrapping a `&[Frequency]`) whose
+/// backing store lives for as long as the `Results` object the caller holds.
+/// We rebuild the flat `Hd*` view over those same borrows and run the existing
+/// `copy_frequency_entries`, so the UTF-8/per-field/aggregate limits and the
+/// verbatim value/display-value semantics stay in exactly one place (and stay
+/// unit-tested against the raw shim).
+fn bridge_frequency_entries(
+    entries: &[hoshidicts::FrequencyEntry],
+    budget: &mut usize,
+) -> Result<Vec<LookupFrequencyEntry>, String> {
+    // Keep the per-entry `Hd*` slices alive for the duration of the copy: the
+    // outer `HdFrequencyEntry` borrows a pointer into `nested`.
+    let nested: Vec<Vec<HdFrequency>> = entries
+        .iter()
+        .map(|entry| {
+            entry
+                .frequencies()
+                .iter()
+                .map(|frequency| HdFrequency {
+                    value: frequency.value(),
+                    display_value: HdStr::borrow(frequency.display_value()),
+                })
+                .collect()
+        })
+        .collect();
+    let shims: Vec<HdFrequencyEntry> = entries
+        .iter()
+        .zip(nested.iter())
+        .map(|(entry, values)| HdFrequencyEntry {
+            dict_name: HdStr::borrow(entry.dict_name()),
+            frequencies: values.as_ptr(),
+            frequencies_count: values.len(),
+        })
+        .collect();
+    unsafe { copy_frequency_entries(shims.as_ptr(), shims.len(), budget) }
+}
+
+/// Bridge the crate's borrowed pitch slices into the raw shim the copy helper
+/// validates. See `bridge_frequency_entries` for the lifetime/limits rationale.
+fn bridge_pitch_entries(
+    entries: &[hoshidicts::PitchEntry],
+    budget: &mut usize,
+) -> Result<Vec<LookupPitchEntry>, String> {
+    let nested_pitches: Vec<Vec<HdPitch>> = entries
+        .iter()
+        .map(|entry| {
+            entry
+                .pitches()
+                .iter()
+                .map(|pitch| {
+                    let nasal = pitch.nasal();
+                    let devoice = pitch.devoice();
+                    HdPitch {
+                        position: pitch.position(),
+                        pattern: HdStr::borrow(pitch.pattern()),
+                        nasal: nasal.as_ptr(),
+                        nasal_count: nasal.len(),
+                        devoice: devoice.as_ptr(),
+                        devoice_count: devoice.len(),
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let nested_transcriptions: Vec<Vec<HdStr>> = entries
+        .iter()
+        .map(|entry| entry.transcriptions().map(HdStr::borrow).collect())
+        .collect();
+    let shims: Vec<HdPitchEntry> = entries
+        .iter()
+        .zip(nested_pitches.iter())
+        .zip(nested_transcriptions.iter())
+        .map(|((entry, pitches), transcriptions)| HdPitchEntry {
+            dict_name: HdStr::borrow(entry.dict_name()),
+            pitches: pitches.as_ptr(),
+            pitches_count: pitches.len(),
+            transcriptions: transcriptions.as_ptr(),
+            transcriptions_count: transcriptions.len(),
+        })
+        .collect();
+    unsafe { copy_pitch_entries(shims.as_ptr(), shims.len(), budget) }
+}
+
+/// Bridge the crate's borrowed dictionary-style slice into the raw shim the
+/// copy helper validates. See `bridge_frequency_entries` for the rationale.
+fn bridge_dictionary_styles(
+    styles: &[hoshidicts::DictionaryStyle],
+) -> Result<Vec<DictionaryStyle>, String> {
+    let shims: Vec<HdDictionaryStyle> = styles
+        .iter()
+        .map(|style| HdDictionaryStyle {
+            dict_name: HdStr::borrow(style.dict_name()),
+            styles: HdStr::borrow(style.styles()),
+        })
+        .collect();
+    unsafe { copy_dictionary_styles(shims.as_ptr(), shims.len()) }
+}
+
+/// Safe call-site wrapper: copy a crate-borrowed `&str` under the aggregate
+/// budget and the default per-field byte cap. The crate hands back a real,
+/// already-length-delimited `&str`, so building the `(ptr, len)` view and
+/// running the unit-tested `copy_hd_string_bounded` over it is sound.
+fn copy_bounded_str(value: &str, label: &str, budget: &mut usize) -> Result<String, String> {
+    unsafe { copy_hd_string_bounded(HdStr::borrow(value), label, budget) }
+}
+
+/// Safe call-site wrapper for `copy_hd_string_bounded_with_limit`; see
+/// `copy_bounded_str` for the soundness rationale.
+fn copy_bounded_str_with_limit(
+    value: &str,
+    label: &str,
+    budget: &mut usize,
+    maximum_bytes: usize,
+) -> Result<String, String> {
+    unsafe { copy_hd_string_bounded_with_limit(HdStr::borrow(value), label, budget, maximum_bytes) }
+}
+
+/// Map GSM's `LookupOptions` to the crate's `LookupFrequencyOrder`, mirroring
+/// the previous raw `hd_lookup_frequency_order`: frequency sorting is disabled
+/// unless a sort dictionary is selected, and GSM never emits `Auto`. Extracted
+/// as a free function so the mapping is unit-tested independently of a live
+/// engine.
+fn crate_frequency_order(options: &LookupOptions) -> LookupFrequencyOrder {
+    if options.sort_frequency_dictionary.is_none() {
+        LookupFrequencyOrder::Disabled
+    } else {
+        match options.sort_frequency_order {
+            LookupFrequencySortOrder::Ascending => LookupFrequencyOrder::Ascending,
+            LookupFrequencySortOrder::Descending => LookupFrequencyOrder::Descending,
+        }
+    }
 }
 
 fn validate_lookup_text(text: &str) -> Result<(), String> {
@@ -2389,6 +2203,7 @@ async fn reload_payload(
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::ptr;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use zip::write::SimpleFileOptions;
@@ -2810,6 +2625,49 @@ mod tests {
     fn lookup_text_is_bounded() {
         assert!(validate_lookup_text("").is_err());
         assert!(validate_lookup_text(&"x".repeat(MAX_LOOKUP_TEXT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn frequency_order_maps_to_crate_enum_and_disables_without_a_sort_dictionary() {
+        use hoshidicts::LookupFrequencyOrder;
+
+        // No sort dictionary -> the engine must be told frequency sorting is
+        // disabled, regardless of the requested order. GSM never emits `Auto`.
+        for order in [
+            LookupFrequencySortOrder::Ascending,
+            LookupFrequencySortOrder::Descending,
+        ] {
+            let options = LookupOptions {
+                sort_frequency_dictionary: None,
+                sort_frequency_order: order,
+                ..LookupOptions::default()
+            };
+            assert_eq!(
+                crate_frequency_order(&options),
+                LookupFrequencyOrder::Disabled
+            );
+        }
+
+        // With a sort dictionary the requested order is honoured verbatim.
+        let ascending = LookupOptions {
+            sort_frequency_dictionary: Some("BCCWJ".into()),
+            sort_frequency_order: LookupFrequencySortOrder::Ascending,
+            ..LookupOptions::default()
+        };
+        assert_eq!(
+            crate_frequency_order(&ascending),
+            LookupFrequencyOrder::Ascending
+        );
+
+        let descending = LookupOptions {
+            sort_frequency_dictionary: Some("BCCWJ".into()),
+            sort_frequency_order: LookupFrequencySortOrder::Descending,
+            ..LookupOptions::default()
+        };
+        assert_eq!(
+            crate_frequency_order(&descending),
+            LookupFrequencyOrder::Descending
+        );
     }
 
     #[test]
