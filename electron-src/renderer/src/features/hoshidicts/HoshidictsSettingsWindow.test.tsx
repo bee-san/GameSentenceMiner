@@ -1609,11 +1609,25 @@ describe("HoshidictsSettingsWindow", () => {
   });
 
   it("shows the live popup preview with fit and actual-size modes", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
     await render();
     await openDesign();
 
     const frame = container.querySelector<HTMLIFrameElement>(
       'iframe[src="./hoshidicts-preview/index.html"]'
+    );
+    const viewport = container.querySelector<HTMLElement>(
+      ".hoshidicts-popup-preview__viewport"
+    );
+    const canvas = container.querySelector<HTMLElement>(
+      ".hoshidicts-popup-preview__canvas"
+    );
+    const stage = container.querySelector<HTMLElement>(
+      ".hoshidicts-popup-preview__stage"
+    );
+    const status = container.querySelector<HTMLElement>(
+      ".hoshidicts-popup-preview__status"
     );
     const scaleToFit = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Scale to fit"
@@ -1625,11 +1639,28 @@ describe("HoshidictsSettingsWindow", () => {
     expect(frame?.title).toBe("HoshiDict popup preview");
     expect(scaleToFit?.getAttribute("aria-pressed")).toBe("true");
     expect(actualSize?.getAttribute("aria-pressed")).toBe("false");
+    expect(viewport?.dataset.scaleToFit).toBe("true");
+    expect(Number.parseFloat(canvas?.style.width ?? "0")).toBeLessThan(656);
+    expect(Number.parseFloat(canvas?.style.height ?? "0")).toBeLessThan(532);
+    expect(stage?.style.width).toBe("656px");
+    expect(stage?.style.height).toBe("532px");
+    expect(stage?.style.transform).not.toBe("scale(1)");
+    const initialStatus = status?.textContent;
 
     await settle(() => actualSize?.click(), 1);
 
     expect(scaleToFit?.getAttribute("aria-pressed")).toBe("false");
     expect(actualSize?.getAttribute("aria-pressed")).toBe("true");
+    expect(viewport?.dataset.scaleToFit).toBe("false");
+    expect(canvas?.style.width).toBe("656px");
+    expect(canvas?.style.height).toBe("532px");
+    expect(stage?.style.transform).toBe("scale(1)");
+
+    await settle(() => scaleToFit?.click(), 1);
+
+    expect(viewport?.dataset.scaleToFit).toBe("true");
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(status?.textContent).toBe(initialStatus);
   });
 
   it("live previews, auto-saves, and resets custom popup CSS", async () => {
