@@ -857,6 +857,17 @@
     return compactDefinitionItemsFromNodes([parsed]);
   }
 
+  function extractCompactDefinitionImage(rawGlossary) {
+    const parsed = parseCompactDefinitionValue(rawGlossary);
+    if (parsed === null) return null;
+    return findCompactDefinitionNodes(
+      parsed,
+      (value) => value.type === "image" ||
+        String(value.tag || "").toLowerCase() === "img",
+      { nodes: 0 }
+    )[0] || null;
+  }
+
   function extractCompactDefinitionSummary(
     glossaries,
     preferredDictionary = null,
@@ -909,7 +920,12 @@
           break;
         }
       }
-      if (items.length > 0) return { dictionary, items };
+      if (items.length > 0) {
+        const image = rawGlossaries
+          .map(extractCompactDefinitionImage)
+          .find(Boolean) || null;
+        return { dictionary, image, items };
+      }
     }
     return null;
   }
@@ -1587,6 +1603,9 @@
         compactDefinitionSummaryCount =
           DEFAULT_COMPACT_DEFINITION_SUMMARY_COUNT,
         compactDefinitionSummaryDictionary = null,
+        generation = null,
+        resolveMedia = null,
+        onLayoutChange = null,
         showPitchAccentFurigana = true,
         pitchAccentFuriganaDictionary = null,
       } = {}
@@ -1629,14 +1648,38 @@
           compactDefinitionSummaryCount
         );
         if (compactSummary) {
-          const summary = documentRef.createElement("ul");
+          const summary = documentRef.createElement("div");
           summary.className = "gsm-hoshidicts-compact-definition-summary";
           summary.dataset.hoshidictsDictionary = compactSummary.dictionary;
+          if (compactSummary.image && typeof resolveMedia === "function") {
+            const image = documentRef.createElement("div");
+            image.className = "gsm-hoshidicts-compact-definition-image";
+            appendTextOnlyGlossary(
+              documentRef,
+              image,
+              JSON.stringify({
+                type: "structured-content",
+                content: compactSummary.image,
+              }),
+              {
+                dictionary: compactSummary.dictionary,
+                generation,
+                onLayoutChange,
+                resolveMedia,
+              }
+            );
+            if (image.childNodes.length > 0) {
+              summary.appendChild(image);
+            }
+          }
+          const items = documentRef.createElement("ul");
+          items.className = "gsm-hoshidicts-compact-definition-items";
           for (const item of compactSummary.items) {
             const listItem = documentRef.createElement("li");
             listItem.textContent = item;
-            summary.appendChild(listItem);
+            items.appendChild(listItem);
           }
+          summary.appendChild(items);
           headword.appendChild(summary);
         }
       }
@@ -1757,6 +1800,9 @@
             typeof renderContext.compactDefinitionSummaryDictionary === "string"
               ? renderContext.compactDefinitionSummaryDictionary
               : null,
+          generation: renderContext.generation,
+          resolveMedia: renderContext.resolveMedia,
+          onLayoutChange: positionPopup,
           showPitchAccentFurigana:
             renderContext.showPitchAccentFurigana !== false,
           pitchAccentFuriganaDictionary:

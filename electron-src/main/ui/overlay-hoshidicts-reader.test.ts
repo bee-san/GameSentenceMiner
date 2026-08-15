@@ -1531,6 +1531,70 @@ describe("Hoshidicts compact definition summaries", () => {
     expect(summary.querySelector("a, img, ruby, span")).toBeNull();
   });
 
+  it("shows a tiny image from the dictionary chosen for the compact definition", async () => {
+    const harness = createReaderHarness({
+      lookupMode: "hover",
+      showCompactDefinitionSummary: true,
+      compactDefinitionSummaryDictionary: "Illustrated Dictionary"
+    });
+    await renderFirstLookup(harness, {
+      shiftKey: false,
+      transform(response) {
+        response.results[0].term.glossaries = [
+          {
+            dictionary: "Other Dictionary",
+            glossary: JSON.stringify({
+              type: "structured-content",
+              content: [
+                { type: "image", path: "img/other.jpg", width: 200, height: 100 },
+                { tag: "p", content: "other definition" }
+              ]
+            }),
+            definitionTags: "",
+            termTags: ""
+          },
+          {
+            dictionary: "Illustrated Dictionary",
+            glossary: JSON.stringify({
+              type: "structured-content",
+              content: [
+                {
+                  type: "image",
+                  path: "img/chosen.jpg",
+                  width: 320,
+                  height: 180,
+                  data: { alt: "Chosen illustration" }
+                },
+                { tag: "p", content: "chosen definition" }
+              ]
+            }),
+            definitionTags: "",
+            termTags: ""
+          }
+        ];
+      }
+    });
+
+    const summary = harness.reader.getPopupElement().querySelector<HTMLElement>(
+      ".gsm-hoshidicts-compact-definition-summary"
+    )!;
+    expect(summary.dataset.hoshidictsDictionary).toBe("Illustrated Dictionary");
+    expect(summary.textContent).toContain("chosen definition");
+    const image = summary.querySelector<HTMLImageElement>(
+      ".gsm-hoshidicts-compact-definition-image img"
+    )!;
+    expect(image).not.toBeNull();
+    expect(image.alt).toBe("Chosen illustration");
+    expect(image.closest<HTMLElement>(".gloss-image-link")?.dataset.path)
+      .toBe("img/chosen.jpg");
+    expect(
+      readerCssRule(".gsm-hoshidicts-compact-definition-image .gloss-image-container")
+    ).toContain("width: 36px");
+    expect(
+      readerCssRule(".gsm-hoshidicts-compact-definition-image .gloss-image-container")
+    ).toContain("height: 36px");
+  });
+
   it("supports plain JMdict JSON strings and arrays", async () => {
     const harness = createReaderHarness({
       lookupMode: "hover",
