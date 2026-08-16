@@ -1443,6 +1443,27 @@ describe("Hoshidicts compact definition summaries", () => {
       .toContain("definition 8");
   });
 
+  it("counts bullet-separated text as separate compact definition items", async () => {
+    const harness = createReaderHarness({
+      lookupMode: "hover",
+      showCompactDefinitionSummary: true,
+      compactDefinitionSummaryCount: 2
+    });
+    await renderFirstLookup(harness, {
+      shiftKey: false,
+      transform(response) {
+        response.results[0].term.glossaries[0].glossary =
+          "Male • 16 years • 175cm • 65kg • Birthday: February 6";
+      }
+    });
+
+    const summary = harness.reader.getPopupElement().querySelector<HTMLElement>(
+      ".gsm-hoshidicts-compact-definition-summary"
+    )!;
+    expect(Array.from(summary.querySelectorAll("li"), (item) => item.textContent))
+      .toEqual(["Male", "16 years"]);
+  });
+
   it("truncates the compact text budget without truncating the full definition", async () => {
     const harness = createReaderHarness({
       lookupMode: "hover",
@@ -1543,13 +1564,7 @@ describe("Hoshidicts compact definition summaries", () => {
         response.results[0].term.glossaries = [
           {
             dictionary: "Other Dictionary",
-            glossary: JSON.stringify({
-              type: "structured-content",
-              content: [
-                { type: "image", path: "img/other.jpg", width: 200, height: 100 },
-                { tag: "p", content: "other definition" }
-              ]
-            }),
+            glossary: "other definition",
             definitionTags: "",
             termTags: ""
           },
@@ -1593,6 +1608,24 @@ describe("Hoshidicts compact definition summaries", () => {
     expect(
       readerCssRule(".gsm-hoshidicts-compact-definition-image .gloss-image-container")
     ).toContain("height: 36px");
+
+    const sentBeforePreferenceChanges = harness.socket.sent.length;
+    harness.reader.updatePreferences({
+      compactDefinitionSummaryDictionary: "Other Dictionary"
+    });
+    const textOnlySummary = harness.reader.getPopupElement().querySelector<HTMLElement>(
+      ".gsm-hoshidicts-compact-definition-summary"
+    )!;
+    expect(textOnlySummary.dataset.hoshidictsDictionary).toBe("Other Dictionary");
+    expect(textOnlySummary.querySelector(
+      ".gsm-hoshidicts-compact-definition-image"
+    )).toBeNull();
+
+    harness.reader.updatePreferences({ showCompactDefinitionSummary: false });
+    expect(harness.socket.sent).toHaveLength(sentBeforePreferenceChanges);
+    expect(harness.reader.getPopupElement().querySelector(
+      ".gsm-hoshidicts-compact-definition-summary"
+    )).toBeNull();
   });
 
   it("supports plain JMdict JSON strings and arrays", async () => {

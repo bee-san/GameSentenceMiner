@@ -5,6 +5,7 @@
   const SERVER_URL = "ws://127.0.0.1:7276";
   const LOOKUP_COUNT = 12;
   const SEEN_COUNT = 42;
+  const NativeWebSocket = window.WebSocket;
 
   let reader = null;
   let currentPreferences = null;
@@ -83,6 +84,74 @@
     };
   }
 
+  class PreviewWebSocket extends EventTarget {
+    static CONNECTING = NativeWebSocket.CONNECTING;
+    static OPEN = NativeWebSocket.OPEN;
+    static CLOSING = NativeWebSocket.CLOSING;
+    static CLOSED = NativeWebSocket.CLOSED;
+
+    constructor(url) {
+      super();
+      this.socket = new NativeWebSocket(url);
+      this.socket.addEventListener("open", () => {
+        this.dispatchEvent(new Event("open"));
+      });
+      this.socket.addEventListener("error", () => {
+        this.dispatchEvent(new Event("error"));
+      });
+      this.socket.addEventListener("close", (event) => {
+        this.dispatchEvent(new CloseEvent("close", {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean
+        }));
+      });
+      this.socket.addEventListener("message", (event) => {
+        let data = event.data;
+        try {
+          const payload = JSON.parse(data);
+          window.GSMHoshidictsPreviewFixture.decorateLookupPayload(
+            payload,
+            currentPreferences?.compactDefinitionSummaryDictionary ?? null
+          );
+          data = JSON.stringify(payload);
+        } catch {
+          return;
+        }
+        this.dispatchEvent(new MessageEvent("message", { data }));
+      });
+    }
+
+    get readyState() {
+      return this.socket.readyState;
+    }
+
+    send(data) {
+      let request = null;
+      try {
+        request = JSON.parse(data);
+      } catch {
+        this.socket.send(data);
+        return;
+      }
+      if (!window.GSMHoshidictsPreviewFixture.isBeeMediaRequest(request)) {
+        this.socket.send(data);
+        return;
+      }
+      void window.GSMHoshidictsPreviewFixture
+        .createBeeMediaResponse(request)
+        .then((payload) => {
+          this.dispatchEvent(new MessageEvent("message", {
+            data: JSON.stringify(payload)
+          }));
+        });
+    }
+
+    close(code, reason) {
+      this.socket.close(code, reason);
+    }
+  }
+
   function definitionBlurEqual(left, right) {
     return (
       isRecord(left) &&
@@ -98,6 +167,10 @@
     return Boolean(
       previous &&
         (previous.showLookupCounts !== next.showLookupCounts ||
+          previous.showCompactDefinitionSummary !==
+            next.showCompactDefinitionSummary ||
+          previous.compactDefinitionSummaryDictionary !==
+            next.compactDefinitionSummaryDictionary ||
           !definitionBlurEqual(previous.definitionBlur, next.definitionBlur))
     );
   }
@@ -160,6 +233,7 @@
     return api.createHoshidictsReader({
       ...preferences,
       serverUrl: SERVER_URL,
+      WebSocket: PreviewWebSocket,
       activationKeyPressed: true,
       audioController: createPreviewAudioController(),
       logger: {

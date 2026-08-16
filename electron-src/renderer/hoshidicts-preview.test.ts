@@ -34,6 +34,7 @@ describe("Hoshidicts popup preview assets", () => {
       "audio.js",
       "popup.js",
       "reader.js",
+      "preview-fixture.js",
       "preview.js"
     ]);
     for (const fileName of scripts) {
@@ -72,5 +73,56 @@ describe("Hoshidicts popup preview assets", () => {
       | { createHoshidictsReader?: unknown }
       | undefined;
     expect(reader?.createHoshidictsReader).toBeTypeOf("function");
+  });
+
+  it("adds the bee illustration only to the dictionary used by the preview summary", () => {
+    const browserWindow: Record<string, unknown> = {};
+    const context = vm.createContext({ window: browserWindow });
+    vm.runInContext(
+      readFileSync(path.join(previewDirectory, "preview-fixture.js"), "utf8"),
+      context,
+      { filename: "preview-fixture.js" }
+    );
+    const fixture = browserWindow.GSMHoshidictsPreviewFixture as {
+      decorateLookupPayload(payload: unknown, dictionary: string | null): void;
+    };
+    const payload = {
+      type: "hoshidicts_lookup_result",
+      success: true,
+      results: [{
+        term: {
+          glossaries: [
+            { dictionary: "JMdict", glossary: "bee" },
+            { dictionary: "Illustrated", glossary: "honey-making insect" }
+          ]
+        }
+      }]
+    };
+
+    fixture.decorateLookupPayload(payload, "Illustrated");
+
+    expect(payload.results[0].term.glossaries).toHaveLength(3);
+    expect(payload.results[0].term.glossaries[0]).toEqual({
+      dictionary: "JMdict",
+      glossary: "bee"
+    });
+    expect(payload.results[0].term.glossaries[1]).toEqual(
+      expect.objectContaining({
+        dictionary: "Illustrated",
+        glossary: expect.stringContaining('"path":"preview/bee.png"')
+      })
+    );
+    expect(payload.results[0].term.glossaries[2]).toEqual({
+      dictionary: "Illustrated",
+      glossary: "honey-making insect"
+    });
+  });
+
+  it("ships a real PNG for the live bee example", () => {
+    const image = readFileSync(path.join(previewDirectory, "bee.png"));
+    expect(image.subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    );
+    expect(image.byteLength).toBeGreaterThan(1_000);
   });
 });
