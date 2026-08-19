@@ -269,9 +269,9 @@ export function isHoshidictsPopupCustomLinkTemplate(
     try {
         const parsed = new URL(
             template
-                .replaceAll('%blob', 'payload')
-                .replaceAll('%w', 'word')
-                .replaceAll('%s', 'sentence')
+                .replace(/%blob/gu, 'payload')
+                .replace(/%w/gu, 'word')
+                .replace(/%s/gu, 'sentence')
         );
         return (
             (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&

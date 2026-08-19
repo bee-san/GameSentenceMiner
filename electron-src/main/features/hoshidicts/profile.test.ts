@@ -136,6 +136,30 @@ describe('Hoshidicts Anki button profiles', () => {
         );
     });
 
+    it('preserves configurable buttons in a versionless v4-shaped profile', () => {
+        const profile = normalizeHoshidictsMiningProfile({
+            enabled: true,
+            buttons: [
+                buttonConfig({
+                    id: 'add-sentence',
+                    label: 'Add sentence',
+                    model: 'Sentence',
+                }),
+            ],
+        });
+
+        expect(profile).toMatchObject({
+            version: 4,
+            buttons: [
+                {
+                    id: 'add-sentence',
+                    label: 'Add sentence',
+                    model: 'Sentence',
+                },
+            ],
+        });
+    });
+
     it.each([
         ['a non-array button collection', { version: 4, enabled: true, buttons: {} }],
         ['a non-boolean legacy enabled value', { version: 3, enabled: 'yes' }],

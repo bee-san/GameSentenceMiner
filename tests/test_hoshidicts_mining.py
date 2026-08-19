@@ -1165,64 +1165,106 @@ def test_status_exposes_stable_configuration_reasons(monkeypatch, config, expect
     assert status["buttons"][0]["reason"] == expected_reason
 
 
-def test_generic_mining_uses_each_selected_buttons_deck_model_and_templates(monkeypatch):
+def test_mining_routes_add_vocab_and_sentence_to_distinct_note_types(monkeypatch):
     fields_by_model = {
-        "Recognition": ["Word", "Meaning"],
-        "Production": ["Front", "Example"],
+        "Vocabulary": ["Word", "Meaning"],
+        "Sentence": ["Front", "Example"],
     }
     fake_anki = FakeAnki(
         model_names=list(fields_by_model),
-        decks=["Recognition deck", "Production deck"],
+        decks=["Vocabulary deck", "Sentence deck"],
         responses={
             "modelFieldNames": lambda modelName, **_kwargs: fields_by_model[modelName],
         },
     )
-    wire(monkeypatch, fake_anki)
-    recognition = {
-        **make_mining_profile(
-            deck="Recognition deck",
-            model="Recognition",
+    profile = make_mining_profile_document(
+        make_anki_button(
+            "add-vocab",
+            label="Add vocab",
+            deck="Vocabulary deck",
+            model="Vocabulary",
             fieldTemplates=make_field_templates({"Word": "{expression}", "Meaning": "{definition}"}),
         ),
-        "id": "recognition",
-        "enabled": True,
-        "label": "Recognition",
-        "icon": "anki",
-    }
-    production = {
-        **make_mining_profile(
-            deck="Production deck",
-            model="Production",
+        make_anki_button(
+            "add-sentence",
+            label="Add sentence",
+            deck="Sentence deck",
+            model="Sentence",
             fieldTemplates=make_field_templates({"Front": "{reading}", "Example": "{sentence}"}),
         ),
-        "id": "production",
-        "enabled": True,
-        "label": "Production",
-        "icon": "sparkles",
-    }
-
-    recognition_result = hoshidicts_mining.mine_hoshidicts_note_for_button(
-        recognition,
-        make_payload(),
     )
-    production_result = hoshidicts_mining.mine_hoshidicts_note_for_button(
-        production,
-        make_payload(),
+    wire(monkeypatch, fake_anki, profile)
+    app = Flask(__name__)
+    hoshidicts_api.register_hoshidicts_api_routes(app)
+    client = app.test_client()
+
+    vocab_response = client.post(
+        "/api/hoshidicts/mine",
+        json={**make_payload(), "buttonId": "add-vocab"},
+    )
+    sentence_response = client.post(
+        "/api/hoshidicts/mine",
+        json={**make_payload(), "buttonId": "add-sentence"},
     )
 
-    assert recognition_result["buttonId"] == "recognition"
-    assert production_result["buttonId"] == "production"
-    recognition_note, production_note = fake_anki.notes_for("addNote")
-    assert recognition_note["deckName"] == "Recognition deck"
-    assert recognition_note["modelName"] == "Recognition"
-    assert recognition_note["fields"]["Word"] == "食べる"
-    assert "to eat" in recognition_note["fields"]["Meaning"]
-    assert production_note["deckName"] == "Production deck"
-    assert production_note["modelName"] == "Production"
-    assert production_note["fields"] == {
+    assert vocab_response.status_code == 200
+    assert sentence_response.status_code == 200
+    assert vocab_response.get_json()["buttonId"] == "add-vocab"
+    assert sentence_response.get_json()["buttonId"] == "add-sentence"
+    vocab_note, sentence_note = fake_anki.notes_for("addNote")
+    assert vocab_note["deckName"] == "Vocabulary deck"
+    assert vocab_note["modelName"] == "Vocabulary"
+    assert vocab_note["fields"]["Word"] == "食べる"
+    assert "to eat" in vocab_note["fields"]["Meaning"]
+    assert sentence_note["deckName"] == "Sentence deck"
+    assert sentence_note["modelName"] == "Sentence"
+    assert sentence_note["fields"] == {
         "Front": "たべる",
         "Example": "昨日、<b>食べた</b>。",
     }
+
+
+def test_versionless_v4_shaped_profile_preserves_configured_buttons():
+    profile = make_mining_profile_document(
+        make_anki_button(
+            "add-sentence",
+            label="Add sentence",
+            model="Sentence",
+        )
+    )
+    profile.pop("version")
+
+    normalized = hoshidicts_mining.normalize_hoshidicts_mining_profile_document(profile)
+
+    assert normalized["version"] == 4
+    assert normalized["buttons"][0]["id"] == "add-sentence"
+    assert normalized["buttons"][0]["label"] == "Add sentence"
+    assert normalized["buttons"][0]["model"] == "Sentence"
+
+    profile["version"] = None
+    normalized = hoshidicts_mining.normalize_hoshidicts_mining_profile_document(profile)
+    assert normalized["buttons"][0]["id"] == "add-sentence"
+
+
+def test_load_profile_accepts_hundreds_of_configured_buttons(tmp_path):
+    profile = make_mining_profile_document(
+        *(
+            make_anki_button(
+                f"button-{index}",
+                label=f"Button {index}",
+            )
+            for index in range(128)
+        )
+    )
+    profile_path = tmp_path / "mining-profile.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    assert profile_path.stat().st_size > 64 * 1024
+
+    loaded = hoshidicts_mining.load_hoshidicts_mining_profile_document(profile_path)
+
+    assert len(loaded["buttons"]) == 128
+    assert loaded["buttons"][0]["id"] == "button-0"
+    assert loaded["buttons"][-1]["id"] == "button-127"
 
 
 def test_mining_request_selects_a_saved_button_by_stable_id(monkeypatch):

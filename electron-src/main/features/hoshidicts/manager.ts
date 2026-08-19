@@ -203,8 +203,10 @@ export interface HoshidictsManagerDependencies {
 const MANIFEST_FILE_NAME = 'manifest.json';
 const MANIFEST_VERSION = 1;
 const MAX_GENERATED_INDEX_BYTES = 1024 * 1024;
-// Matches MAX_PROFILE_BYTES in the Python backend, which reads these files.
-const MAX_BACKEND_PROFILE_BYTES = 64 * 1024;
+// Match the corresponding Python readers. Mining profiles can contain an
+// unbounded button collection, while audio profiles have at most 32 sources.
+const MAX_BACKEND_MINING_PROFILE_BYTES = 1024 * 1024;
+const MAX_BACKEND_AUDIO_PROFILE_BYTES = 64 * 1024;
 const MAX_TAB_GROUP_COUNT = 256;
 const MAX_TAB_GROUP_DICTIONARIES = 256;
 const MAX_ARCHIVE_INDEX_BYTES = 1024 * 1024;
@@ -665,9 +667,13 @@ interface SerializedBackendProfiles {
     audio: Buffer;
 }
 
-function serializeBackendProfile(value: unknown, label: string): Buffer {
+function serializeBackendProfile(
+    value: unknown,
+    label: string,
+    maxBytes: number
+): Buffer {
     const serialized = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    if (serialized.length > MAX_BACKEND_PROFILE_BYTES) {
+    if (serialized.length > maxBytes) {
         throw new Error(`${label} exceeded its size limit.`);
     }
     return serialized;
@@ -680,11 +686,13 @@ function serializeBackendProfiles(
     return {
         mining: serializeBackendProfile(
             profile.mining,
-            'Hoshidicts mining profile'
+            'Hoshidicts mining profile',
+            MAX_BACKEND_MINING_PROFILE_BYTES
         ),
         audio: serializeBackendProfile(
             profile.audio,
-            'Hoshidicts audio profile'
+            'Hoshidicts audio profile',
+            MAX_BACKEND_AUDIO_PROFILE_BYTES
         ),
     };
 }

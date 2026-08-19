@@ -2868,6 +2868,36 @@ describe("HoshidictsSettingsWindow", () => {
     );
   });
 
+  it("does not query options for an unsaved generated button", async () => {
+    ipc.configure({
+      handlers: {
+        [HOSHIDICTS_CHANNELS.setMiningProfile]: () => {
+          throw new Error("Save failed.");
+        }
+      }
+    });
+    await render();
+    await openMining();
+    invokeMock.mockClear();
+
+    await settle(() => {
+      container
+        .querySelector<HTMLButtonElement>("#hoshidicts-mining-add-button")
+        ?.click();
+    }, 5);
+    expect(callsFor(HOSHIDICTS_CHANNELS.setMiningProfile)).toHaveLength(1);
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(0);
+
+    await settle(() => window.dispatchEvent(new Event("focus")), 5);
+    await clickAndSettle(
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.includes("Refresh Anki")
+      )
+    );
+
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(0);
+  });
+
   it("adds and renames an independently configured Anki button", async () => {
     vi.useFakeTimers();
     await render();

@@ -174,6 +174,7 @@ export function useHoshidictsSettingsController() {
   const loadMiningOptionsRef = useRef<
     ((model?: string) => Promise<HoshidictsMiningOptions | null>) | null
   >(null);
+  const flushMiningRef = useRef<(() => Promise<boolean>) | null>(null);
   const pendingMiningOptionsButtonIdRef = useRef<string | null>(null);
 
   const [customDocument, setCustomDocument] =
@@ -368,6 +369,7 @@ export function useHoshidictsSettingsController() {
     saveStatus: miningSaveStatus,
     flush: flushMining
   } = miningAutosave;
+  flushMiningRef.current = flushMining;
   selectedMiningButtonIdRef.current = miningDraft.selectedButtonId;
   selectedMiningModelRef.current = miningDraft.model;
 
@@ -385,6 +387,13 @@ export function useHoshidictsSettingsController() {
       const requestId = miningOptionsRequestRef.current + 1;
       miningOptionsRequestRef.current = requestId;
       const buttonId = miningDraftRef.current.selectedButtonId ?? undefined;
+      if (
+        buttonId &&
+        pendingMiningOptionsButtonIdRef.current === buttonId
+      ) {
+        await flushMiningRef.current?.();
+        return null;
+      }
       const modelId = model ?? "";
       const isCurrentRequest = () =>
         requestId === miningOptionsRequestRef.current &&

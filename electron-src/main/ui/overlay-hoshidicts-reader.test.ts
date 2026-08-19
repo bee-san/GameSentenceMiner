@@ -8222,6 +8222,74 @@ describe("Hoshidicts Shift-hover scanner", () => {
     expect(recognition.dataset.state).toBe("ready");
   });
 
+  it("queues a post-mine recheck after the active refresh has passed that button", async () => {
+    const recognitionCheck = deferred<Record<string, unknown>>();
+    let productionChecks = 0;
+    const checkMiningNotes = vi.fn((payload) => {
+      if (payload.buttonId === "recognition") {
+        return recognitionCheck.promise;
+      }
+      productionChecks += 1;
+      const duplicate = productionChecks > 1;
+      return Promise.resolve({
+        success: true,
+        buttonId: "production",
+        duplicateBehavior: "prevent",
+        results: [{
+          state: duplicate ? "duplicate" : "addable",
+          canAdd: !duplicate,
+          duplicate
+        }]
+      });
+    });
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "recognition",
+            label: "Recognition",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine: vi.fn(async () => ({ success: true, noteId: 123 }))
+    });
+    await renderFirstLookup(harness);
+    const [production, recognition] = miningButtonsInResultOrder(
+      harness.reader.getPopupElement()
+    );
+    expect(production.dataset.state).toBe("ready");
+    expect(recognition.dataset.state).toBe("checking");
+
+    production.click();
+    await flushPromises();
+    expect(production.dataset.state).toBe("success");
+
+    recognitionCheck.resolve({
+      success: true,
+      buttonId: "recognition",
+      duplicateBehavior: "prevent",
+      results: [{ state: "addable", canAdd: true, duplicate: false }]
+    });
+    await flushPromises(20);
+
+    expect(productionChecks).toBe(2);
+    expect(production.dataset.state).toBe("duplicate");
+    expect(production.disabled).toBe(true);
+    expect(recognition.dataset.state).toBe("ready");
+  });
+
   it("rechecks simultaneous successful actions for both stable ids", async () => {
     const productionMine = deferred<Record<string, unknown>>();
     const recognitionMine = deferred<Record<string, unknown>>();

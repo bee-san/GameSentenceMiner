@@ -338,7 +338,11 @@ export function normalizeHoshidictsMiningProfile(
     if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
         throw new Error('Hoshidicts mining enabled state is invalid.');
     }
-    const version = value.version ?? LEGACY_MINING_PROFILE_VERSION;
+    const version =
+        value.version ??
+        ('buttons' in value
+            ? MINING_PROFILE_VERSION
+            : LEGACY_MINING_PROFILE_VERSION);
     if (version === LEGACY_MINING_PROFILE_VERSION) {
         const legacyButton = {
             ...value,

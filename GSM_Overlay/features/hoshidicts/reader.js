@@ -3115,6 +3115,7 @@
         miningRefreshPromise: null,
         miningRefreshFeedback: null,
         miningRefreshItems: null,
+        miningRefreshIndex: 0,
         pendingMiningRefreshItems: new Map(),
         pendingMiningRefreshFeedback: null,
         miningStatusGeneration: 0,
@@ -4324,6 +4325,7 @@
           return;
         }
         for (let index = 0; index < miningItems.length; index += 1) {
+          level.miningRefreshIndex = index;
           if (!isLiveMiningRender(level, generation, feedback)) {
             return;
           }
@@ -4405,11 +4407,14 @@
         level.miningRefreshPromise = null;
         level.miningRefreshFeedback = null;
         level.miningRefreshItems = null;
+        level.miningRefreshIndex = 0;
         level.pendingMiningRefreshItems.clear();
         level.pendingMiningRefreshFeedback = null;
       }
       if (level.miningRefreshPromise) {
-        const activeItems = level.miningRefreshItems || [];
+        const activeItems = (level.miningRefreshItems || []).slice(
+          level.miningRefreshIndex
+        );
         for (const miningItem of miningItems) {
           const coveredByActiveRefresh = activeItems.some(
             (activeItem) => activeItem.button === miningItem.button
@@ -4428,6 +4433,7 @@
       }
       level.miningRefreshFeedback = feedback;
       level.miningRefreshItems = miningItems;
+      level.miningRefreshIndex = 0;
       const refresh = refreshMiningButtons(level, miningItems, feedback);
       level.miningRefreshPromise = refresh;
       const finish = () => {
@@ -4437,6 +4443,7 @@
         level.miningRefreshPromise = null;
         level.miningRefreshFeedback = null;
         level.miningRefreshItems = null;
+        level.miningRefreshIndex = 0;
         const pendingItems = Array.from(
           level.pendingMiningRefreshItems.values()
         ).filter(({ button }) => button.isConnected);

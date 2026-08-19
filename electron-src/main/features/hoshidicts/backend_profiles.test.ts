@@ -247,8 +247,35 @@ describe('Hoshidicts backend profile files', () => {
         );
     });
 
-    // The profile files cap at 64 KiB to match the Python reader, well below the
-    // manifest's 1 MiB. That must reject the save up front, not after committing.
+    it('publishes hundreds of configured buttons without a count limit', async () => {
+        const baseDirectory = makeBaseDirectory();
+        const manager = makeManager(baseDirectory);
+        const profile = defaultHoshidictsMiningProfile();
+        profile.buttons = Array.from({ length: 128 }, (_unused, index) => ({
+            ...profile.buttons[0],
+            id: `button-${index}`,
+            label: `Button ${index}`,
+        }));
+
+        await manager.setMiningProfile(profile);
+
+        expect((await fsp.stat(manager.miningProfilePath)).size).toBeGreaterThan(
+            64 * 1024
+        );
+        const published = (await readJson(manager.miningProfilePath)) as {
+            buttons: unknown[];
+        };
+        expect(published.buttons).toHaveLength(128);
+        expect(published).toMatchObject({
+            buttons: expect.arrayContaining([
+                expect.objectContaining({ id: 'button-0' }),
+                expect.objectContaining({ id: 'button-127' }),
+            ]),
+        });
+    });
+
+    // The mining profile still has a defensive byte limit. It must reject the
+    // save up front, not after committing the manifest.
     it('rejects an oversized mining profile without committing the manifest', async () => {
         const baseDirectory = makeBaseDirectory();
         const manager = makeManager(baseDirectory);
@@ -263,7 +290,7 @@ describe('Hoshidicts backend profile files', () => {
                 miningProfile({
                     deck: 'Too big',
                     fieldTemplates: Object.fromEntries(
-                        Array.from({ length: 40 }, (_unused, index) => [
+                        Array.from({ length: 600 }, (_unused, index) => [
                             `field-${index}`,
                             { value: 'x'.repeat(2000), overwriteMode: 'coalesce' },
                         ])

@@ -66,7 +66,7 @@ HOSHIDICTS_MINING_PROFILE_FILE = "mining-profile.json"
 HOSHIDICTS_MINING_PROFILE_VERSION = 3
 HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION = 4
 HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID = "add-to-anki"
-MAX_PROFILE_BYTES = 64 * 1024
+MAX_PROFILE_BYTES = 1024 * 1024
 MAX_BROWSE_REQUEST_BYTES = 64 * 1024
 MINING_STATUS_CACHE_SECONDS = 2.0
 SAFE_ANKI_BUTTON_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -280,7 +280,13 @@ def _normalize_hoshidicts_anki_button(value: Any) -> dict[str, Any]:
 def normalize_hoshidicts_mining_profile_document(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise HoshidictsMiningError("Hoshidicts mining profile must be an object.")
-    if value.get("version", HOSHIDICTS_MINING_PROFILE_VERSION) != HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION:
+    raw_version = value.get("version")
+    inferred_version = (
+        (HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION if "buttons" in value else HOSHIDICTS_MINING_PROFILE_VERSION)
+        if raw_version is None
+        else raw_version
+    )
+    if inferred_version != HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION:
         legacy = normalize_hoshidicts_mining_profile(value)
         legacy.pop("version")
         return {
