@@ -759,6 +759,7 @@ def test_status_rejects_a_blank_first_field_template(monkeypatch):
     assert status.pop("enabled") is True
     assert status == {
         "available": False,
+        "reason": "firstFieldEmpty",
         "error": 'The first Anki field "Front" is empty. Map it to a value before mining.',
     }
     assert buttons == [
@@ -770,6 +771,18 @@ def test_status_rejects_a_blank_first_field_template(monkeypatch):
             **status,
         }
     ]
+
+
+def test_status_rejects_a_note_type_without_fields(monkeypatch):
+    fake_anki = FakeAnki(fields=[])
+    wire(monkeypatch, fake_anki)
+
+    status = hoshidicts_mining.get_hoshidicts_mining_status()
+
+    assert status["available"] is False
+    assert status["reason"] == "noteTypeNoFields"
+    assert status["error"] == "The selected Anki note type has no fields."
+    assert status["buttons"][0]["reason"] == "noteTypeNoFields"
 
 
 def test_options_accept_a_selected_note_type_and_detect_a_renamed_lapis_schema(monkeypatch):
@@ -1047,14 +1060,17 @@ def test_status_reports_each_button_readiness_without_one_invalid_button_hiding_
         ],
     }
     assert buttons["missing-deck"]["available"] is False
+    assert buttons["missing-deck"]["reason"] == "deckMissing"
     assert buttons["missing-deck"]["error"] == (
         'Anki deck "Archived deck" does not exist. Choose another deck in Hoshidicts Settings.'
     )
     assert buttons["missing-model"]["available"] is False
+    assert buttons["missing-model"]["reason"] == "noteTypeNotFound"
     assert buttons["missing-model"]["error"] == (
         'Anki note type "Renamed model" does not exist. Choose another note type in Hoshidicts Settings.'
     )
     assert buttons["missing-field"]["available"] is False
+    assert buttons["missing-field"]["reason"] == "fieldMappingInvalid"
     assert buttons["missing-field"]["error"] == (
         'Anki field "Removed" does not exist in note type "Production". '
         "Update this button's field mappings in Hoshidicts Settings."
@@ -1076,8 +1092,10 @@ def test_status_reports_unavailable_ankiconnect_per_enabled_button(monkeypatch):
     buttons = {button["id"]: button for button in status["buttons"]}
     for button_id in ("recognition", "production"):
         assert buttons[button_id]["available"] is False
+        assert buttons[button_id]["reason"] == "ankiUnavailable"
         assert buttons[button_id]["error"] == ("Could not connect to Anki through GSM: connection refused")
     assert buttons["disabled"]["available"] is False
+    assert buttons["disabled"]["reason"] == "buttonUnavailable"
     assert buttons["disabled"]["error"] == "This Anki button is disabled."
     assert fake_anki.actions() == ["modelNames", "modelNames"]
 
@@ -1114,6 +1132,7 @@ def test_status_exposes_global_mining_visibility_without_contacting_anki(monkeyp
 
     assert status["enabled"] is False
     assert status["available"] is False
+    assert status["reason"] == "miningDisabled"
     assert status["error"] == "Hoshidicts mining is disabled."
     assert status["buttons"] == [
         {
@@ -1122,10 +1141,28 @@ def test_status_exposes_global_mining_visibility_without_contacting_anki(monkeyp
             "icon": "anki",
             "enabled": True,
             "available": False,
+            "reason": "miningDisabled",
             "error": "Hoshidicts mining is disabled.",
         }
     ]
     assert fake_anki.actions() == []
+
+
+@pytest.mark.parametrize(
+    ("config", "expected_reason"),
+    [
+        (make_config(enabled=False), "ankiDisabled"),
+        (make_config(note_type=""), "noteTypeMissing"),
+    ],
+)
+def test_status_exposes_stable_configuration_reasons(monkeypatch, config, expected_reason):
+    fake_anki = FakeAnki()
+    wire(monkeypatch, fake_anki, config=config)
+
+    status = hoshidicts_mining.get_hoshidicts_mining_status()
+
+    assert status["reason"] == expected_reason
+    assert status["buttons"][0]["reason"] == expected_reason
 
 
 def test_generic_mining_uses_each_selected_buttons_deck_model_and_templates(monkeypatch):

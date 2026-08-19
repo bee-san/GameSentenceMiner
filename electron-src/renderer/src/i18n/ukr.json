@@ -968,6 +968,23 @@
       "mining": {
         "title": "Профіль видобування Anki",
         "enabled": "Увімкнути видобування",
+        "buttons": {
+          "title": "Кнопки Anki",
+          "help": "Створіть окрему кнопку для кожного місця видобування. Цей порядок використовується у спливному вікні.",
+          "empty": "Кнопки Anki ще не налаштовано.",
+          "name": "Назва кнопки",
+          "newName": "Нова кнопка Anki",
+          "add": "Додати кнопку",
+          "duplicate": "Дублювати {name}",
+          "duplicateName": "Копія {name}",
+          "enable": "Увімкнути {name}",
+          "disable": "Вимкнути {name}",
+          "enabledState": "Увімкнено",
+          "disabledState": "Вимкнено",
+          "moveUp": "Перемістити {name} вгору",
+          "moveDown": "Перемістити {name} вниз",
+          "delete": "Видалити {name}"
+        },
         "checkingAnki": "Перевірка AnkiConnect...",
         "ankiConnected": "AnkiConnect підключено",
         "ankiDisconnected": "AnkiConnect не підключено",

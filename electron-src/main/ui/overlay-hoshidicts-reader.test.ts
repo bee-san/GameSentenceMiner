@@ -4053,6 +4053,142 @@ describe("Hoshidicts dictionary tabs", () => {
     expect(replacementButton.disabled).toBe(false);
   });
 
+  it("revalidates a configured replacement tab without duplicate checks", async () => {
+    const finishMine = deferred<Record<string, unknown>>();
+    const status = {
+      available: true,
+      buttons: [{
+        id: "production",
+        label: "Production",
+        icon: "anki",
+        enabled: true,
+        available: true,
+        reason: null as string | null
+      }]
+    };
+    const { lookup } = createLookupHarness({
+      getMiningStatus: async () => status,
+      onMine: vi.fn(() => finishMine.promise)
+    });
+    const { popup } = await lookup((requestId) =>
+      lookupResultWithDictionaries(requestId, [
+        { dictionary: "JMdict", glossary: "to eat" },
+        { dictionary: "Jitendex", glossary: "to consume" }
+      ])
+    );
+    await flushPromises();
+
+    popup.querySelector<HTMLButtonElement>(
+      '.gsm-hoshidicts-mine-button[data-button-id="production"]'
+    )!.click();
+    Array.from(
+      popup.querySelectorAll('[role="tab"]') as NodeListOf<HTMLButtonElement>
+    ).find((tab) => tab.textContent === "Jitendex")!
+      .click();
+    await flushPromises();
+    const replacement = popup.querySelector<HTMLButtonElement>(
+      '.gsm-hoshidicts-mine-button[data-button-id="production"]'
+    )!;
+    expect(replacement.dataset.state).toBe("checking");
+
+    status.buttons[0]!.available = false;
+    status.buttons[0]!.reason = "deckMissing";
+    finishMine.resolve({
+      success: false,
+      error: "AnkiConnect stopped responding."
+    });
+    await flushPromises(12);
+
+    expect(replacement.dataset.state).toBe("unavailable");
+    expect(replacement.disabled).toBe(true);
+    expect(replacement.title).toBe(
+      "Production: Choose an Anki deck in Hoshidicts Settings."
+    );
+  });
+
+  it("checks a configured replacement-tab button after a failed in-flight mine", async () => {
+    const finishMine = deferred<Record<string, unknown>>();
+    let productionChecks = 0;
+    const checkedButtonIds: string[] = [];
+    const checkMiningNotes = vi.fn(async (payload) => {
+      checkedButtonIds.push(payload.buttonId);
+      if (payload.buttonId === "production") {
+        productionChecks += 1;
+      }
+      const duplicate =
+        payload.buttonId === "production" && productionChecks > 1;
+      return {
+        success: true,
+        buttonId: payload.buttonId,
+        duplicateBehavior: "prevent",
+        results: [{
+          state: duplicate ? "duplicate" : "addable",
+          canAdd: !duplicate,
+          duplicate
+        }]
+      };
+    });
+    const { lookup, reader } = createLookupHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "recognition",
+            label: "Recognition",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine: vi.fn(() => finishMine.promise)
+    });
+    const { popup } = await lookup((requestId) =>
+      lookupResultWithDictionaries(requestId, [
+        { dictionary: "JMdict", glossary: "to eat" },
+        { dictionary: "Jitendex", glossary: "to consume" }
+      ])
+    );
+    await flushPromises();
+
+    popup.querySelector<HTMLButtonElement>(
+      '.gsm-hoshidicts-mine-button[data-button-id="production"]'
+    )!.click();
+    Array.from(
+      popup.querySelectorAll('[role="tab"]') as NodeListOf<HTMLButtonElement>
+    ).find((tab) => tab.textContent === "Jitendex")!
+      .click();
+    await flushPromises();
+
+    const replacementProduction = popup.querySelector<HTMLButtonElement>(
+      '.gsm-hoshidicts-mine-button[data-button-id="production"]'
+    )!;
+    expect(replacementProduction.dataset.state).toBe("checking");
+
+    finishMine.resolve({
+      success: false,
+      error: "AnkiConnect stopped responding."
+    });
+    await flushPromises(12);
+
+    expect(checkedButtonIds).toEqual([
+      "production",
+      "recognition",
+      "recognition",
+      "production"
+    ]);
+    expect(replacementProduction.dataset.state).toBe("duplicate");
+    expect(replacementProduction.disabled).toBe(true);
+  });
+
   it("resets the selected dictionary to All on the next lookup", async () => {
     const { lookup, reader, second } = createLookupHarness();
     const { popup: firstPopup } = await lookup((requestId) =>
@@ -6629,6 +6765,76 @@ describe("Hoshidicts Shift-hover scanner", () => {
     expect(parentSync[1]).toEqual({ autoPlay: false });
   });
 
+  it("checks a configured mining button added in a nested popup during a failed mine", async () => {
+    const finishMine = deferred<Record<string, unknown>>();
+    const checkedExpressions: string[] = [];
+    const checkMiningNotes = vi.fn(async (payload) => {
+      checkedExpressions.push(payload.notes[0].result.term.expression);
+      return {
+        success: true,
+        buttonId: payload.buttonId,
+        duplicateBehavior: "prevent",
+        results: [{ state: "addable", canAdd: true, duplicate: false }]
+      };
+    });
+    const { dom, first, reader, socket } = createReaderHarness({
+      lookupMode: "hover",
+      popupNestingMaxDepth: 1,
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [{
+          id: "production",
+          label: "Production",
+          icon: "anki",
+          enabled: true,
+          available: true
+        }]
+      }),
+      onMine: vi.fn(() => finishMine.promise)
+    });
+
+    await hover(dom, first);
+    const rootRequest = lastRequest(socket);
+    socket.receive(lookupResult(rootRequest.requestId, "食べる", "説明：食事を選ぶ"));
+    await flushPromises();
+    const rootPopup = reader.getPopupElement();
+    rootPopup.querySelector<HTMLButtonElement>(
+      '.gsm-hoshidicts-mine-button[data-button-id="production"]'
+    )!.click();
+
+    const definition = rootPopup.querySelector<HTMLElement>(
+      ".gsm-hoshidicts-glossary-content"
+    )!;
+    const caret = dom.window.document.createRange();
+    caret.setStart(definition.firstChild!, 3);
+    caret.collapse(true);
+    Object.defineProperty(dom.window.document, "caretRangeFromPoint", {
+      configurable: true,
+      value: vi.fn(() => caret.cloneRange())
+    });
+    await hover(dom, definition, { clientX: 40, clientY: 40 });
+    const childRequest = lastRequest(socket);
+    await respond(socket, lookupResult(childRequest.requestId, "食事", "meal"));
+
+    const childProduction = reader.getPopupElements()[1]
+      .querySelector<HTMLButtonElement>(
+        '.gsm-hoshidicts-mine-button[data-button-id="production"]'
+      )!;
+    expect(checkedExpressions).toEqual(["食べる"]);
+    expect(childProduction.dataset.state).toBe("checking");
+
+    finishMine.resolve({
+      success: false,
+      error: "AnkiConnect stopped responding."
+    });
+    await flushPromises(12);
+
+    expect(checkedExpressions).toEqual(["食べる", "食事"]);
+    expect(childProduction.dataset.state).toBe("ready");
+    expect(childProduction.disabled).toBe(false);
+  });
+
   it("uses the hovered definition as child mining sentence context", async () => {
     const mine = vi.fn(async () => ({ success: true, noteId: 123 }));
     const { api, dom, first, reader, socket } = createReaderHarness({
@@ -7496,6 +7702,639 @@ describe("Hoshidicts Shift-hover scanner", () => {
     expect(getMiningStatus).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["en", "deckMissing", "Choose an Anki deck in Hoshidicts Settings."],
+    ["ja", "deckMissing", "Hoshidicts設定でAnkiデッキを選択してください。"],
+    ["ukr", "deckMissing", "Виберіть колоду Anki в налаштуваннях Hoshidicts."],
+    ["en", "noteTypeNoFields", "Choose an Anki note type with fields in Hoshidicts Settings."],
+    ["ja", "noteTypeNoFields", "Hoshidicts設定でフィールドのあるAnkiノートタイプを選択してください。"],
+    [
+      "ukr",
+      "noteTypeNoFields",
+      "Виберіть тип нотатки Anki з полями в налаштуваннях Hoshidicts."
+    ]
+  ])(
+    "renders enabled Anki buttons in order and localizes %s for %s",
+    async (locale, reason, unavailableMessage) => {
+      const checkMiningNotes = vi.fn(async (payload) => ({
+        success: true,
+        buttonId: payload.buttonId,
+        duplicateBehavior: "prevent",
+        results: payload.notes.map(() => ({
+          state: "addable",
+          canAdd: true,
+          duplicate: false
+        }))
+      }));
+      const harness = createReaderHarness({
+        locale,
+        checkMiningNotes,
+        getMiningStatus: async () => ({
+          available: false,
+          buttons: [
+            {
+              id: "production",
+              label: "Production",
+              icon: "anki",
+              enabled: true,
+              available: true
+            },
+            {
+              id: "recognition",
+              label: "Recognition",
+              icon: "anki",
+              enabled: true,
+              available: false,
+              reason,
+              error: "Raw backend configuration diagnostic."
+            },
+            {
+              id: "disabled-button",
+              label: "Disabled",
+              icon: "anki",
+              enabled: false,
+              available: false
+            }
+          ]
+        }),
+        onMine: vi.fn()
+      });
+
+      await renderFirstLookup(harness);
+
+      const buttons = miningButtonsInResultOrder(
+        harness.reader.getPopupElement()
+      );
+      expect(buttons.map((button) => button.dataset.buttonId)).toEqual([
+        "production",
+        "recognition"
+      ]);
+      expect(buttons.map((button) => button.textContent)).toEqual([
+        "Production",
+        "Recognition"
+      ]);
+      expect(buttons[0]).toMatchObject({ hidden: false, disabled: false });
+      expect(buttons[0].dataset.state).toBe("ready");
+      expect(buttons[1]).toMatchObject({ hidden: false, disabled: true });
+      expect(buttons[1].dataset.state).toBe("unavailable");
+      expect(buttons[1].title).toContain(unavailableMessage);
+      expect(checkMiningNotes).toHaveBeenCalledTimes(1);
+      expect(checkMiningNotes).toHaveBeenCalledWith(
+        expect.objectContaining({ buttonId: "production" })
+      );
+    }
+  );
+
+  it("keeps configured Anki button labels visible beside their icons", async () => {
+    const harness = createReaderHarness({
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine: vi.fn()
+    });
+
+    await renderFirstLookup(harness);
+
+    const button = harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-mine-button")!;
+    expect(button.classList).toContain("gsm-hoshidicts-mine-button--labeled");
+    expect(button.querySelector(".gsm-hoshidicts-mine-label")?.textContent)
+      .toBe("Production");
+
+    const labeledRule =
+      readerCssRule(".gsm-hoshidicts-mine-button--labeled") ?? "";
+    expect(labeledRule).toMatch(/flex\s*:\s*0\s+1\s+auto/u);
+    expect(labeledRule).toMatch(/width\s*:\s*auto/u);
+    expect(labeledRule).toMatch(/max-width\s*:/u);
+  });
+
+  it("keeps initial configured mining buttons tracked after lazy expansion", async () => {
+    const checkMiningNotes = vi.fn(async () => ({
+      success: true,
+      duplicateBehavior: "prevent",
+      results: [{ state: "addable", canAdd: true, duplicate: false }]
+    }));
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [{
+          id: "production",
+          label: "Production",
+          icon: "anki",
+          enabled: true,
+          available: true
+        }]
+      }),
+      onMine: vi.fn(async () => ({
+        success: false,
+        error: "AnkiConnect stopped responding."
+      }))
+    });
+    await renderFirstLookup(harness, {
+      transform(response: ReturnType<typeof lookupResult>) {
+        response.results.push({
+          ...response.results[0],
+          matched: "食う",
+          term: {
+            ...response.results[0].term,
+            expression: "食う",
+            reading: "くう"
+          }
+        });
+      }
+    });
+
+    harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-show-more")!
+      .click();
+    await flushPromises();
+    const [initialButton, appendedButton] = miningButtonsInResultOrder(
+      harness.reader.getPopupElement()
+    );
+    expect(checkMiningNotes).toHaveBeenCalledTimes(2);
+
+    appendedButton.click();
+    await flushPromises();
+
+    expect(appendedButton.dataset.state).toBe("error");
+    expect(initialButton.dataset.state).toBe("ready");
+    expect(initialButton.disabled).toBe(false);
+  });
+
+  it("checks configured buttons appended during an active replacement refresh once", async () => {
+    const firstCheck = deferred<Record<string, unknown>>();
+    const checkedItems: string[] = [];
+    const checkMiningNotes = vi.fn((payload) => {
+      checkedItems.push(
+        `${payload.buttonId}:${payload.notes[0].result.term.expression}`
+      );
+      if (checkedItems.length === 1) {
+        return firstCheck.promise;
+      }
+      return Promise.resolve({
+        success: true,
+        duplicateBehavior: "prevent",
+        results: [{ state: "addable", canAdd: true, duplicate: false }]
+      });
+    });
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "recognition",
+            label: "Recognition",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine: vi.fn()
+    });
+    await renderFirstLookup(harness, {
+      transform(response: ReturnType<typeof lookupResult>) {
+        response.results.push({
+          ...response.results[0],
+          matched: "食う",
+          term: {
+            ...response.results[0].term,
+            expression: "食う",
+            reading: "くう"
+          }
+        });
+      }
+    });
+    expect(checkMiningNotes).toHaveBeenCalledTimes(1);
+
+    harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-show-more")!
+      .click();
+    expect(miningButtonsInResultOrder(harness.reader.getPopupElement()))
+      .toHaveLength(4);
+
+    firstCheck.resolve({
+      success: true,
+      duplicateBehavior: "prevent",
+      results: [{ state: "addable", canAdd: true, duplicate: false }]
+    });
+    await flushPromises(12);
+
+    expect(checkedItems).toEqual([
+      "production:食べる",
+      "recognition:食べる",
+      "production:食う",
+      "recognition:食う"
+    ]);
+    expect(miningButtonsInResultOrder(harness.reader.getPopupElement()).every(
+      (button: HTMLButtonElement) =>
+        !button.hidden && button.dataset.state === "ready"
+    )).toBe(true);
+  });
+
+  it("checks lazy results queued during a targeted post-mine refresh", async () => {
+    const targetedCheck = deferred<Record<string, unknown>>();
+    const checked: string[] = [];
+    let firstProductionChecks = 0;
+    const checkMiningNotes = vi.fn((payload) => {
+      const term = payload.notes[0].result.term.expression;
+      checked.push(`${term}:${payload.buttonId}`);
+      if (term === "食べる" && payload.buttonId === "production") {
+        firstProductionChecks += 1;
+        if (firstProductionChecks === 2) {
+          return targetedCheck.promise;
+        }
+      }
+      return Promise.resolve({
+        success: true,
+        buttonId: payload.buttonId,
+        duplicateBehavior: "prevent",
+        results: [{ state: "addable", canAdd: true, duplicate: false }]
+      });
+    });
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "recognition",
+            label: "Recognition",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine: vi.fn(async () => ({ success: true }))
+    });
+    await renderFirstLookup(harness, {
+      transform(response: ReturnType<typeof lookupResult>) {
+        response.results.push({
+          ...response.results[0],
+          term: {
+            ...response.results[0].term,
+            expression: "食う",
+            reading: "くう"
+          }
+        });
+      }
+    });
+    const popup = harness.reader.getPopupElement();
+
+    miningButtonsInResultOrder(popup)[0]!.click();
+    await flushPromises();
+    expect(checked).toEqual([
+      "食べる:production",
+      "食べる:recognition",
+      "食べる:production"
+    ]);
+    popup.querySelector<HTMLButtonElement>(".gsm-hoshidicts-show-more")!
+      .click();
+    await flushPromises();
+
+    targetedCheck.resolve({
+      success: true,
+      buttonId: "production",
+      duplicateBehavior: "prevent",
+      results: [{ state: "duplicate", canAdd: false, duplicate: true }]
+    });
+    await flushPromises(20);
+
+    expect(checked).toEqual([
+      "食べる:production",
+      "食べる:recognition",
+      "食べる:production",
+      "食う:production",
+      "食う:recognition"
+    ]);
+    expect(miningButtonsInResultOrder(popup).slice(2).map(
+      (button: HTMLButtonElement) => button.dataset.state
+    )).toEqual(["ready", "ready"]);
+  });
+
+  it("keeps simultaneous Anki button actions independent", async () => {
+    const productionRequest = deferred<Record<string, unknown>>();
+    const onMine = vi.fn((payload) =>
+      payload.buttonId === "production"
+        ? productionRequest.promise
+        : Promise.resolve({
+            success: false,
+            error: "Recognition destination rejected the note."
+          })
+    );
+    const harness = createReaderHarness({
+      checkMiningNotes: async (payload) => ({
+        success: true,
+        buttonId: payload.buttonId,
+        duplicateBehavior: "prevent",
+        results: payload.notes.map(() => ({
+          state: "addable",
+          canAdd: true,
+          duplicate: false
+        }))
+      }),
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "recognition",
+            label: "Recognition",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine
+    });
+    await renderFirstLookup(harness);
+    const [production, recognition] = miningButtonsInResultOrder(
+      harness.reader.getPopupElement()
+    );
+
+    production.click();
+    await flushPromises();
+
+    expect(production.dataset.state).toBe("mining");
+    expect(production.disabled).toBe(true);
+    expect(recognition.dataset.state).toBe("ready");
+    expect(recognition.disabled).toBe(false);
+
+    recognition.click();
+    await flushPromises();
+
+    expect(onMine.mock.calls.map(([payload]) => payload.buttonId)).toEqual([
+      "production",
+      "recognition"
+    ]);
+    expect(recognition.dataset.state).toBe("error");
+    expect(recognition.title).toContain("Recognition destination rejected the note.");
+    expect(production.dataset.state).toBe("mining");
+
+    productionRequest.resolve({ success: true });
+    await flushPromises();
+
+    expect(production.dataset.state).toBe("ready");
+    expect(recognition.dataset.state).toBe("error");
+    expect(
+      harness.reader.getPopupElement()
+        .querySelector(".gsm-hoshidicts-mining-feedback")?.textContent
+    ).toBe("Added to Anki.");
+  });
+
+  it("restores configured sibling labels without prefixing them twice", async () => {
+    const mineRequest = deferred<Record<string, unknown>>();
+    const harness = createReaderHarness({
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [{
+          id: "production",
+          label: "Production",
+          icon: "anki",
+          enabled: true,
+          available: true
+        }]
+      }),
+      onMine: vi.fn(() => mineRequest.promise)
+    });
+    await renderFirstLookup(harness, {
+      transform(response: ReturnType<typeof lookupResult>) {
+        response.results.push({
+          ...response.results[0],
+          term: {
+            ...response.results[0].term,
+            expression: "食う",
+            reading: "くう"
+          }
+        });
+      }
+    });
+    harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-show-more")!
+      .click();
+    await flushPromises();
+    const [first, sibling] = miningButtonsInResultOrder(
+      harness.reader.getPopupElement()
+    );
+    expect(sibling.title).toBe("Production: Mine to Anki");
+
+    first.click();
+    mineRequest.resolve({ success: true });
+    await flushPromises();
+
+    expect(sibling.title).toBe("Production: Mine to Anki");
+    expect(sibling.getAttribute("aria-label")).toBe(
+      "Production: Mine to Anki"
+    );
+  });
+
+  it("rechecks only the affected stable id after a successful mine", async () => {
+    let productionChecks = 0;
+    const checkedButtonIds: string[] = [];
+    const checkMiningNotes = vi.fn(async (payload) => {
+      checkedButtonIds.push(payload.buttonId);
+      if (payload.buttonId === "production") {
+        productionChecks += 1;
+      }
+      const duplicate =
+        payload.buttonId === "production" && productionChecks > 1;
+      return {
+        success: true,
+        buttonId: payload.buttonId,
+        duplicateBehavior: "prevent",
+        results: [{
+          state: duplicate ? "duplicate" : "addable",
+          canAdd: !duplicate,
+          duplicate
+        }]
+      };
+    });
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "recognition",
+            label: "Recognition",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine: vi.fn(async () => ({ success: true, noteId: 123 }))
+    });
+    await renderFirstLookup(harness);
+    const [production, recognition] = miningButtonsInResultOrder(
+      harness.reader.getPopupElement()
+    );
+
+    production.click();
+    await flushPromises();
+
+    expect(checkedButtonIds).toEqual([
+      "production",
+      "recognition",
+      "production"
+    ]);
+    expect(production.dataset.state).toBe("duplicate");
+    expect(recognition.dataset.state).toBe("ready");
+  });
+
+  it("rechecks simultaneous successful actions for both stable ids", async () => {
+    const productionMine = deferred<Record<string, unknown>>();
+    const recognitionMine = deferred<Record<string, unknown>>();
+    const checkCounts = new Map<string, number>();
+    const checkMiningNotes = vi.fn(async (payload) => {
+      const count = (checkCounts.get(payload.buttonId) || 0) + 1;
+      checkCounts.set(payload.buttonId, count);
+      return {
+        success: true,
+        buttonId: payload.buttonId,
+        duplicateBehavior: "prevent",
+        results: [{
+          state: count > 1 ? "duplicate" : "addable",
+          canAdd: count === 1,
+          duplicate: count > 1
+        }]
+      };
+    });
+    const onMine = vi.fn((payload) =>
+      payload.buttonId === "production"
+        ? productionMine.promise
+        : recognitionMine.promise
+    );
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "recognition",
+            label: "Recognition",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine
+    });
+    await renderFirstLookup(harness);
+    const [production, recognition] = miningButtonsInResultOrder(
+      harness.reader.getPopupElement()
+    );
+
+    production.click();
+    await flushPromises();
+    recognition.click();
+    await flushPromises();
+    expect(onMine).toHaveBeenCalledTimes(2);
+    productionMine.resolve({ success: true });
+    recognitionMine.resolve({ success: true });
+    await flushPromises(20);
+
+    expect(checkCounts).toEqual(new Map([
+      ["production", 2],
+      ["recognition", 2]
+    ]));
+    expect(production.dataset.state).toBe("duplicate");
+    expect(recognition.dataset.state).toBe("duplicate");
+  });
+
+  it("rechecks a configured stable id after a duplicate rejection", async () => {
+    const checkMiningNotes = vi.fn()
+      .mockResolvedValueOnce({
+        success: true,
+        buttonId: "production",
+        duplicateBehavior: "prevent",
+        results: [{ state: "addable", canAdd: true, duplicate: false }]
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        buttonId: "production",
+        duplicateBehavior: "prevent",
+        results: [{ state: "duplicate", canAdd: false, duplicate: true }]
+      });
+    const duplicateError = Object.assign(new Error("The note already exists."), {
+      code: "duplicate"
+    });
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [{
+          id: "production",
+          label: "Production",
+          icon: "anki",
+          enabled: true,
+          available: true
+        }]
+      }),
+      onMine: vi.fn(async () => { throw duplicateError; })
+    });
+    await renderFirstLookup(harness);
+    const button = harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(
+        '.gsm-hoshidicts-mine-button[data-button-id="production"]'
+      )!;
+
+    button.click();
+    await flushPromises();
+
+    expect(checkMiningNotes).toHaveBeenCalledTimes(2);
+    expect(button.dataset.state).toBe("duplicate");
+    expect(button.disabled).toBe(true);
+  });
+
   it("routes per-button readiness and mining payloads by stable id", async () => {
     const statusRequest = deferred<Record<string, unknown>>();
     const checkMiningNotes = vi.fn(async () => ({
@@ -7593,6 +8432,50 @@ describe("Hoshidicts Shift-hover scanner", () => {
       .querySelector<HTMLButtonElement>(".gsm-hoshidicts-mine-button")!;
     expect(button.dataset.state).toBe("unavailable");
     expect(button.hidden).toBe(true);
+    expect(checkMiningNotes).not.toHaveBeenCalled();
+  });
+
+  it("keeps duplicate stable ids visible but unavailable", async () => {
+    const checkMiningNotes = vi.fn();
+    const harness = createReaderHarness({
+      locale: "ja",
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          {
+            id: "production",
+            label: "Production A",
+            icon: "anki",
+            enabled: true,
+            available: true
+          },
+          {
+            id: "production",
+            label: "Production B",
+            icon: "anki",
+            enabled: true,
+            available: true
+          }
+        ]
+      }),
+      onMine: vi.fn()
+    });
+
+    await renderFirstLookup(harness);
+
+    const buttons = miningButtonsInResultOrder(
+      harness.reader.getPopupElement()
+    );
+    expect(buttons).toHaveLength(2);
+    expect(buttons.every((button: HTMLButtonElement) =>
+      !button.hidden &&
+      button.disabled &&
+      button.dataset.state === "unavailable"
+    )).toBe(true);
+    expect(buttons[0]?.title).toBe(
+      "Production A: Hoshidicts設定でこのAnkiボタンを確認してください。"
+    );
     expect(checkMiningNotes).not.toHaveBeenCalled();
   });
 

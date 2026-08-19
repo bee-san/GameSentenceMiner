@@ -71,6 +71,13 @@ MAX_BROWSE_REQUEST_BYTES = 64 * 1024
 MINING_STATUS_CACHE_SECONDS = 2.0
 SAFE_ANKI_BUTTON_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+
+class _MiningConfigurationError(HoshidictsMiningError):
+    def __init__(self, message: str, reason: str, status_code: int = 503):
+        super().__init__(message, status_code)
+        self.reason = reason
+
+
 GENERIC_FIELD_ALIASES = {
     "expression": ("Expression", "Word", "Term", "Front"),
     "reading": ("Reading", "Word Reading", "WordReading", "Kana"),
@@ -730,48 +737,50 @@ def _resolve_mining_configuration(
     if config is None:
         config = get_config()
     if not profile["enabled"]:
-        raise HoshidictsMiningError("Hoshidicts mining is disabled.", 503)
+        raise _MiningConfigurationError("Hoshidicts mining is disabled.", "miningDisabled")
     if not config.anki.enabled:
-        raise HoshidictsMiningError("GSM Anki integration is disabled.", 503)
+        raise _MiningConfigurationError("GSM Anki integration is disabled.", "ankiDisabled")
 
     requested_model = profile["model"] or str(config.anki.note_type or "").strip()
     if not requested_model:
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             "Set an Anki note type in GSM or override it in Hoshidicts.",
-            503,
+            "noteTypeMissing",
         )
 
     try:
         raw_models = invoke("modelNames")
         raw_decks = invoke("deckNames")
     except Exception as exc:
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             f"Could not connect to Anki through GSM: {exc}",
+            "ankiUnavailable",
             502,
         ) from exc
     try:
         models = name_list(raw_models, "Anki note type list")
         decks = name_list(raw_decks, "Anki deck list")
     except HoshidictsMiningError as exc:
-        raise HoshidictsMiningError(str(exc), 503) from exc
+        raise _MiningConfigurationError(str(exc), "ankiUnavailable") from exc
     model = find_field(models, requested_model)
     if model is None:
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             f'Anki note type "{requested_model}" does not exist. Choose another note type in Hoshidicts Settings.',
-            503,
+            "noteTypeNotFound",
         )
     deck = find_field(decks, profile["deck"])
     if deck is None:
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             f'Anki deck "{profile["deck"]}" does not exist. Choose another deck in Hoshidicts Settings.',
-            503,
+            "deckMissing",
         )
 
     try:
         raw_model_fields = invoke("modelFieldNames", modelName=model)
     except Exception as exc:
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             f"Could not connect to Anki through GSM: {exc}",
+            "ankiUnavailable",
             502,
         ) from exc
     try:
@@ -780,23 +789,31 @@ def _resolve_mining_configuration(
             "Anki field list",
         )
     except HoshidictsMiningError as exc:
-        raise HoshidictsMiningError(str(exc), 503) from exc
+        raise _MiningConfigurationError(str(exc), "ankiUnavailable") from exc
+    if not model_fields:
+        raise _MiningConfigurationError(
+            "The selected Anki note type has no fields.",
+            "noteTypeNoFields",
+        )
 
     resolution = _resolve_mining_fields(model_fields, profile, config)
     if resolution["staleFields"]:
         field = resolution["staleFields"][0]
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             f'Anki field "{field}" does not exist in note type "{model}". '
             "Update this button's field mappings in Hoshidicts Settings.",
-            503,
+            "fieldMappingInvalid",
         )
     if resolution["invalidFields"]:
         key, field = next(iter(resolution["invalidFields"].items()))
-        raise HoshidictsMiningError(_invalid_field_message(key, field, model), 503)
+        raise _MiningConfigurationError(
+            _invalid_field_message(key, field, model),
+            "fieldMappingInvalid",
+        )
     if model_fields and not resolution["resolvedFieldTemplates"][model_fields[0]]["value"].strip():
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             f'The first Anki field "{model_fields[0]}" is empty. Map it to a value before mining.',
-            503,
+            "firstFieldEmpty",
         )
 
     return {
@@ -847,11 +864,14 @@ def _compute_mining_status(
             "fields": resolved["fields"],
             "unmappedFields": resolved["unmappedFields"],
         }
+    except _MiningConfigurationError as exc:
+        return {"available": False, "reason": exc.reason, "error": str(exc)}
     except HoshidictsMiningError as exc:
-        return {"available": False, "error": str(exc)}
+        return {"available": False, "reason": "buttonUnavailable", "error": str(exc)}
     except Exception as exc:
         return {
             "available": False,
+            "reason": "buttonUnavailable",
             "error": f"Could not connect to Anki through GSM: {exc}",
         }
 
@@ -884,9 +904,17 @@ def get_hoshidicts_mining_status() -> dict[str, Any]:
             "enabled": button["enabled"],
         }
         if not profile["enabled"]:
-            button_status = {"available": False, "error": "Hoshidicts mining is disabled."}
+            button_status = {
+                "available": False,
+                "reason": "miningDisabled",
+                "error": "Hoshidicts mining is disabled.",
+            }
         elif not button["enabled"]:
-            button_status = {"available": False, "error": "This Anki button is disabled."}
+            button_status = {
+                "available": False,
+                "reason": "buttonUnavailable",
+                "error": "This Anki button is disabled.",
+            }
         else:
             button_status = _compute_mining_status(button, config)
         button_statuses.append({**metadata, **button_status})
@@ -899,7 +927,11 @@ def get_hoshidicts_mining_status() -> dict[str, Any]:
         ),
     )
     if selected_status is None:
-        status = {"available": False, "error": "No Hoshidicts Anki buttons are configured."}
+        status = {
+            "available": False,
+            "reason": "buttonUnavailable",
+            "error": "No Hoshidicts Anki buttons are configured.",
+        }
     else:
         status = {key: value for key, value in selected_status.items() if key not in {"id", "label", "icon", "enabled"}}
     status["enabled"] = profile["enabled"]

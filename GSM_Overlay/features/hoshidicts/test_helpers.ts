@@ -374,13 +374,13 @@ export function lookupResultWithDictionaries(
 }
 
 export function miningButtonsInResultOrder(popup: Element) {
-  const primary = popup.querySelector<HTMLButtonElement>(
+  const primary = Array.from(popup.querySelectorAll<HTMLButtonElement>(
     ".gsm-hoshidicts-primary-header .gsm-hoshidicts-mine-button"
-  );
+  ));
   const remaining = Array.from(popup.querySelectorAll<HTMLButtonElement>(
     ".gsm-hoshidicts-entry .gsm-hoshidicts-mine-button"
   ));
-  return primary ? [primary, ...remaining] : remaining;
+  return [...primary, ...remaining];
 }
 
 export async function flushPromises(iterations = 6) {

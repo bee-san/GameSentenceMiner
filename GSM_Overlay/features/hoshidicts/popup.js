@@ -488,7 +488,7 @@
   function setMiningButtonState(button, state, message = "") {
     button.dataset.state = state;
     button.disabled = !["ready", "add-duplicate", "overwrite", "error"].includes(state);
-    button.title = message || {
+    const stateMessage = message || {
       checking: "Checking Anki availability",
       ready: "Mine to Anki",
       "add-duplicate": "Add duplicate to Anki",
@@ -499,6 +499,9 @@
       duplicate: "Note already exists",
       unavailable: "Anki mining is unavailable",
     }[state] || "Mine to Anki";
+    button.dataset.stateMessage = stateMessage;
+    const buttonLabel = String(button.dataset.buttonLabel || "").trim();
+    button.title = buttonLabel ? `${buttonLabel}: ${stateMessage}` : stateMessage;
     button.setAttribute("aria-label", button.title);
     const icon = button.ownerDocument.createElement("span");
     icon.className = "gsm-hoshidicts-mine-icon";
@@ -508,7 +511,7 @@
       "add-duplicate": "add-duplicate-big-circle",
       overwrite: "overwrite-big-circle",
       duplicate: "add-duplicate-big-circle",
-    }[state];
+    }[state] || (button.dataset.icon === "anki" ? "big-circle" : "");
     if (iconName) {
       icon.dataset.icon = iconName;
     } else {
@@ -521,6 +524,12 @@
       }[state] || "-";
     }
     button.replaceChildren(icon);
+    if (buttonLabel) {
+      const label = button.ownerDocument.createElement("span");
+      label.className = "gsm-hoshidicts-mine-label";
+      label.textContent = buttonLabel;
+      button.appendChild(label);
+    }
   }
 
   function formatLookupCount(label, value) {
@@ -1092,6 +1101,7 @@
     let currentNoteForm = null;
     let currentFeedback = null;
     let actionContexts = new Set();
+    let miningButtonProfiles = null;
     let masonryFrame = null;
     const masonryObserver = typeof windowRef.ResizeObserver === "function"
       ? new windowRef.ResizeObserver(() => scheduleMasonry())
@@ -1237,12 +1247,73 @@
       setDefinitionBlurState("revealed");
     }
 
+    function createMiningButton(context, profile = null) {
+      const button = documentRef.createElement("button");
+      button.type = "button";
+      button.className = "gsm-hoshidicts-mine-button";
+      if (profile) {
+        button.classList.add("gsm-hoshidicts-mine-button--labeled");
+        button.dataset.buttonId = profile.id;
+        button.dataset.buttonLabel = profile.label;
+        button.dataset.icon = profile.icon;
+      }
+      button.hidden = true;
+      setMiningButtonState(button, "checking");
+      button.addEventListener("click", () => {
+        onMineClick(
+          button,
+          context.result,
+          context.candidate,
+          context.feedback
+        );
+      });
+      return button;
+    }
+
+    function miningButtonProfileKey(profile) {
+      return profile ? `${profile.id}\u0000${profile.label}\u0000${profile.icon}` : "";
+    }
+
+    function syncContextMiningButtons(context) {
+      const profiles = context.miningEnabled === true
+        ? miningButtonProfiles === null
+          ? [null]
+          : miningButtonProfiles
+        : [];
+      const keys = profiles.map(miningButtonProfileKey);
+      const currentKeys = context.mineButtons.map((button) =>
+        button.dataset.profileKey || ""
+      );
+      if (
+        keys.length === currentKeys.length &&
+        keys.every((key, index) => key === currentKeys[index])
+      ) {
+        return false;
+      }
+      for (const button of context.mineButtons) {
+        button.remove();
+      }
+      context.mineButtons = profiles.map((profile) => {
+        const button = createMiningButton(context, profile);
+        button.dataset.profileKey = miningButtonProfileKey(profile);
+        return button;
+      });
+      return true;
+    }
+
     function arrangeEntryActions(context) {
-      const { actions, audioButton, candidate, feedback, mineButton, noteButton, result } =
-        context;
+      const {
+        actions,
+        audioButton,
+        candidate,
+        feedback,
+        mineButtons,
+        noteButton,
+        result,
+      } = context;
       actions.replaceChildren();
-      if (mineButton && popupButtons.addToAnki) {
-        actions.appendChild(mineButton);
+      if (miningButtonProfiles !== null || popupButtons.addToAnki) {
+        actions.append(...mineButtons);
       }
       if (audioButton && popupButtons.audio) {
         actions.appendChild(audioButton);
@@ -1281,8 +1352,69 @@
     }
 
     function registerEntryActions(context) {
+      syncContextMiningButtons(context);
       actionContexts.add(context);
       arrangeEntryActions(context);
+    }
+
+    function getMiningItems() {
+      const liveContexts = new Set();
+      const miningItems = [];
+      for (const context of actionContexts) {
+        if (!context.actions.isConnected) {
+          continue;
+        }
+        for (const button of context.mineButtons) {
+          miningItems.push({
+            button,
+            result: context.result,
+            candidate: context.candidate,
+          });
+        }
+        liveContexts.add(context);
+      }
+      actionContexts = liveContexts;
+      return miningItems;
+    }
+
+    function setMiningButtonProfiles(value) {
+      miningButtonProfiles = Array.isArray(value)
+        ? value.filter((profile) =>
+          profile &&
+          profile.enabled !== false &&
+          typeof profile.id === "string" &&
+          profile.id.length > 0 &&
+          typeof profile.label === "string" &&
+          profile.label.length > 0
+        ).map((profile) => ({
+          id: profile.id,
+          label: profile.label,
+          icon: typeof profile.icon === "string" && profile.icon
+            ? profile.icon
+            : "anki",
+        }))
+        : null;
+      const liveContexts = new Set();
+      const miningItems = [];
+      let buttonsChanged = false;
+      for (const context of actionContexts) {
+        if (!context.actions.isConnected) {
+          continue;
+        }
+        buttonsChanged = syncContextMiningButtons(context) || buttonsChanged;
+        arrangeEntryActions(context);
+        for (const button of context.mineButtons) {
+          miningItems.push({
+            button,
+            result: context.result,
+            candidate: context.candidate,
+          });
+        }
+        liveContexts.add(context);
+      }
+      actionContexts = liveContexts;
+      positionPopup();
+      return buttonsChanged ? miningItems : null;
     }
 
     function setPopupButtons(value) {
@@ -1541,6 +1673,7 @@
         actions,
         candidate,
         feedback: notice,
+        mineButtons: [],
         noteButton: noteControls.button,
         result: { term: { expression: candidate?.query || "" } },
       });
@@ -1824,28 +1957,27 @@
       audioButton.setAttribute("aria-label", audioButton.title);
       audioButton.textContent = "";
 
-      const mineButton = documentRef.createElement("button");
-      mineButton.type = "button";
-      mineButton.className = "gsm-hoshidicts-mine-button";
-      setMiningButtonState(mineButton, "checking");
-      mineButton.addEventListener("click", () => {
-        onMineClick(mineButton, result, candidate, feedback);
-      });
-      registerEntryActions({
+      const actionContext = {
         actions,
         audioButton,
         candidate,
         feedback,
-        mineButton,
+        miningEnabled: true,
+        mineButtons: [],
         noteButton,
         result,
-      });
+      };
+      registerEntryActions(actionContext);
       header.appendChild(actions);
       return {
         audioItems: [{ button: audioButton, result }],
         element: header,
-        miningItems: [{ button: mineButton, result, candidate }],
-        miningButtons: [mineButton],
+        miningItems: actionContext.mineButtons.map((button) => ({
+          button,
+          result,
+          candidate,
+        })),
+        miningButtons: [...actionContext.mineButtons],
       };
     }
 
@@ -2196,6 +2328,7 @@
         actions,
         candidate,
         feedback,
+        mineButtons: [],
         noteButton: noteControls.button,
         result: { term: { expression: kanji.character } },
       });
@@ -2574,12 +2707,14 @@
 
     return {
       clear,
+      getMiningItems,
       renderNotice,
       renderResults,
       renderKanji,
       setDefinitionBlurState,
       setFeedback,
       setLookupStats,
+      setMiningButtonProfiles,
       setPopupButtons,
       setSourceHighlightEnabled,
       setToolbarPosition,

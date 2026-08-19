@@ -7,7 +7,6 @@ import {
   DEFAULT_HOSHIDICTS_POPUP_HEIGHT_PX,
   DEFAULT_HOSHIDICTS_POPUP_WIDTH_PX,
   HOSHIDICTS_CHANNELS,
-  HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
   MAX_HOSHIDICTS_CUSTOM_POPUP_CSS_LENGTH,
   normalizeHoshidictsReaderPreferences,
   type HoshidictsActionResult,
@@ -43,15 +42,21 @@ import {
 import { useTranslation } from "../../i18n";
 import { invokeIpc, onIpc } from "../../lib/ipc";
 import {
+  addMiningButton as addMiningButtonDraft,
   DEFAULT_MINING_OPTIONS,
   DEFAULT_MINING_PROFILE,
   type SaveStatus,
   type HoshidictsView,
   type MiningProfileDraft,
   copyAudioProfile,
+  deleteMiningButton as deleteMiningButtonDraft,
   draftToProfile,
+  duplicateSelectedMiningButton as duplicateSelectedMiningButtonDraft,
   isScopedBusy,
+  moveMiningButton as moveMiningButtonDraft,
   profileToDraft,
+  selectMiningButton as selectMiningButtonDraft,
+  setMiningButtonEnabled as setMiningButtonEnabledDraft,
   setMiningFieldTemplate
 } from "./hoshidictsSettingsModel";
 import { useHoshidictsAutosave } from "./useHoshidictsAutosave";
@@ -143,10 +148,11 @@ const savedAudioDraft = (
 
 const savedMiningDraft = (
   _result: HoshidictsActionResult,
-  request: HoshidictsMiningProfile
-): MiningProfileDraft => profileToDraft(request);
+  request: HoshidictsMiningProfile,
+  currentDraft: MiningProfileDraft
+): MiningProfileDraft => profileToDraft(request, currentDraft.selectedButtonId);
 
-type SyncDraft<T> = (draft: T, force?: boolean) => void;
+type SyncDraft<T> = (draft: T, force?: boolean) => boolean;
 
 interface DraftSynchronizers {
   reader: SyncDraft<HoshidictsReaderPreferences>;
@@ -163,6 +169,12 @@ export function useHoshidictsSettingsController() {
   const [state, setState] = useState<HoshidictsDesktopSnapshot | null>(null);
   const highestRevisionRef = useRef(-1);
   const initializedRef = useRef(false);
+  const selectedMiningButtonIdRef = useRef<string | null>(null);
+  const selectedMiningModelRef = useRef("");
+  const loadMiningOptionsRef = useRef<
+    ((model?: string) => Promise<HoshidictsMiningOptions | null>) | null
+  >(null);
+  const pendingMiningOptionsButtonIdRef = useRef<string | null>(null);
 
   const [customDocument, setCustomDocument] =
     useState<HoshidictsCustomDictionaryDocument | null>(null);
@@ -195,7 +207,11 @@ export function useHoshidictsSettingsController() {
     viewRef.current = view;
   }, [view]);
 
-  const applyState = useCallback((value: unknown, forceDrafts = false) => {
+  const applyState = useCallback((
+    value: unknown,
+    forceDrafts = false,
+    refreshMiningOptions = false
+  ) => {
     if (!value || typeof value !== "object") return null;
     const normalized = value as HoshidictsDesktopSnapshot;
     if (normalized.revision < highestRevisionRef.current) return null;
@@ -206,18 +222,37 @@ export function useHoshidictsSettingsController() {
     if (!synchronizers) return normalized;
 
     const reader = normalizeHoshidictsReaderPreferences(normalized);
-    const mining = profileToDraft(normalized.miningProfile);
+    const mining = profileToDraft(
+      normalized.miningProfile,
+      selectedMiningButtonIdRef.current
+    );
+    const previousMiningButtonId = selectedMiningButtonIdRef.current;
+    const previousMiningModel = selectedMiningModelRef.current;
     const audio = copyAudioProfile(normalized.audioProfile);
     if (!initializedRef.current) {
       initializedRef.current = true;
       synchronizers.reader(reader, true);
       synchronizers.mining(mining, true);
       synchronizers.audio(audio, true);
+      selectedMiningButtonIdRef.current = mining.selectedButtonId;
+      selectedMiningModelRef.current = mining.model;
       return normalized;
     }
     synchronizers.reader(reader, forceDrafts);
-    synchronizers.mining(mining, forceDrafts);
+    const miningSynced = synchronizers.mining(mining, forceDrafts);
     synchronizers.audio(audio, forceDrafts);
+    if (miningSynced) {
+      selectedMiningButtonIdRef.current = mining.selectedButtonId;
+      selectedMiningModelRef.current = mining.model;
+      if (
+        refreshMiningOptions &&
+        viewRef.current === "mining" &&
+        (previousMiningButtonId !== mining.selectedButtonId ||
+          previousMiningModel !== mining.model)
+      ) {
+        void loadMiningOptionsRef.current?.(mining.model || undefined);
+      }
+    }
     return normalized;
   }, []);
 
@@ -275,6 +310,22 @@ export function useHoshidictsSettingsController() {
     applyResult,
     setActionError
   });
+  const handleMiningSaved = useCallback(
+    (request: HoshidictsMiningProfile, currentDraft: MiningProfileDraft) => {
+      const pendingButtonId = pendingMiningOptionsButtonIdRef.current;
+      if (
+        !pendingButtonId ||
+        !request.buttons.some((button) => button.id === pendingButtonId)
+      ) {
+        return;
+      }
+      pendingMiningOptionsButtonIdRef.current = null;
+      if (currentDraft.selectedButtonId === pendingButtonId) {
+        void loadMiningOptionsRef.current?.(currentDraft.model || undefined);
+      }
+    },
+    []
+  );
   const miningAutosave = useHoshidictsAutosave({
     initialDraft: defaultMiningDraft,
     cloneDraft: copyMiningDraft,
@@ -284,6 +335,7 @@ export function useHoshidictsSettingsController() {
     errorFallback: t("settings.hoshidicts.errors.miningProfile"),
     applyResult,
     setActionError,
+    onSaved: handleMiningSaved,
     paused: miningOptionsLoading
   });
   draftSynchronizersRef.current = {
@@ -311,10 +363,13 @@ export function useHoshidictsSettingsController() {
     draft: miningDraft,
     draftRef: miningDraftRef,
     updateDraft: updateMiningDraft,
+    syncDraft: syncMiningDraft,
     saving: miningSaving,
     saveStatus: miningSaveStatus,
     flush: flushMining
   } = miningAutosave;
+  selectedMiningButtonIdRef.current = miningDraft.selectedButtonId;
+  selectedMiningModelRef.current = miningDraft.model;
 
   const flushAutosaves = useCallback(async (): Promise<boolean> => {
     const results = await Promise.all([
@@ -329,19 +384,25 @@ export function useHoshidictsSettingsController() {
     async (model?: string) => {
       const requestId = miningOptionsRequestRef.current + 1;
       miningOptionsRequestRef.current = requestId;
+      const buttonId = miningDraftRef.current.selectedButtonId ?? undefined;
+      const modelId = model ?? "";
+      const isCurrentRequest = () =>
+        requestId === miningOptionsRequestRef.current &&
+        (miningDraftRef.current.selectedButtonId ?? undefined) === buttonId &&
+        miningDraftRef.current.model === modelId;
       setMiningOptionsLoading(true);
       try {
         const value = await invokeIpc<HoshidictsMiningOptions>(
           HOSHIDICTS_CHANNELS.getMiningOptions,
           model,
-          miningDraftRef.current.selectedButtonId ?? undefined
+          buttonId
         );
-        if (requestId !== miningOptionsRequestRef.current) return null;
+        if (!isCurrentRequest()) return null;
         const normalized = value;
         setMiningOptions(normalized);
         return normalized;
       } catch (error) {
-        if (requestId !== miningOptionsRequestRef.current) return null;
+        if (!isCurrentRequest()) return null;
         setMiningOptions({
           ...DEFAULT_MINING_OPTIONS,
           suggestedFields: { ...DEFAULT_MINING_OPTIONS.suggestedFields },
@@ -362,6 +423,7 @@ export function useHoshidictsSettingsController() {
     },
     [t]
   );
+  loadMiningOptionsRef.current = loadMiningOptions;
 
   const loadCustomDictionary = useCallback(async (force = false) => {
     if (customLoadedRef.current && !force) return;
@@ -401,35 +463,38 @@ export function useHoshidictsSettingsController() {
 
   useEffect(() => {
     let disposed = false;
-    const loadState = () => {
-      void invokeIpc<HoshidictsDesktopSnapshot>(HOSHIDICTS_CHANNELS.getState)
-        .then((snapshot) => {
-          if (!disposed) {
-            applyState(snapshot);
-            setActionError(null);
-          }
-        })
-        .catch((error) => {
-          if (!disposed) {
-            setActionError(
-              errorMessage(error, t("settings.hoshidicts.errors.load"))
-            );
-          }
-        });
-    };
-    const refresh = () => {
-      loadState();
-      if (viewRef.current === "mining") {
-        void loadMiningOptions(miningDraftRef.current.model || undefined);
+    const loadState = async (): Promise<boolean> => {
+      try {
+        const snapshot = await invokeIpc<HoshidictsDesktopSnapshot>(
+          HOSHIDICTS_CHANNELS.getState
+        );
+        if (disposed) return false;
+        applyState(snapshot);
+        setActionError(null);
+        return true;
+      } catch (error) {
+        if (!disposed) {
+          setActionError(
+            errorMessage(error, t("settings.hoshidicts.errors.load"))
+          );
+        }
+        return false;
       }
     };
+    const refresh = () => {
+      void loadState().then((loaded) => {
+        if (loaded && viewRef.current === "mining") {
+          void loadMiningOptions(miningDraftRef.current.model || undefined);
+        }
+      });
+    };
 
-    loadState();
+    void loadState();
     window.addEventListener("focus", refresh);
     const unsubscribe = onIpc(
       HOSHIDICTS_CHANNELS.progress,
       (_event, snapshot) => {
-        if (!disposed) applyState(snapshot);
+        if (!disposed) applyState(snapshot, false, true);
       }
     );
     return () => {
@@ -540,22 +605,12 @@ export function useHoshidictsSettingsController() {
 
   const setPopupButtonEnabled = useCallback(
     (
-      button: "addToAnki" | "audio" | "customDefinition" | "viewInAnki",
+      button: "audio" | "customDefinition" | "viewInAnki",
       enabled: boolean
     ) => {
-      if (button === "addToAnki") {
-        updateMiningDraft((current) => ({
-          ...current,
-          buttons: current.buttons.map((preset) =>
-            preset.id === HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID
-              ? { ...preset, enabled }
-              : preset
-          )
-        }));
-      }
       updatePopupButtons({ [button]: enabled });
     },
-    [updateMiningDraft, updatePopupButtons]
+    [updatePopupButtons]
   );
 
   const setPopupCustomLinks = useCallback(
@@ -649,6 +704,77 @@ export function useHoshidictsSettingsController() {
       });
     },
     [loadMiningOptions, miningOptions.selectedNoteType, updateMiningDraft]
+  );
+
+  const selectMiningButton = useCallback(
+    (buttonId: string) => {
+      const next = selectMiningButtonDraft(miningDraftRef.current, buttonId);
+      selectedMiningButtonIdRef.current = next.selectedButtonId;
+      syncMiningDraft(next, true);
+      void loadMiningOptions(next.model || undefined);
+    },
+    [loadMiningOptions, miningDraftRef, syncMiningDraft]
+  );
+
+  const addMiningButton = useCallback(async () => {
+    const next = addMiningButtonDraft(
+      miningDraftRef.current,
+      t("settings.hoshidicts.mining.buttons.newName")
+    );
+    pendingMiningOptionsButtonIdRef.current = next.selectedButtonId;
+    updateMiningDraft(() => next);
+    await flushMining();
+  }, [flushMining, miningDraftRef, t, updateMiningDraft]);
+
+  const setMiningButtonEnabled = useCallback(
+    (buttonId: string, enabled: boolean) => {
+      updateMiningDraft((current) =>
+        setMiningButtonEnabledDraft(current, buttonId, enabled)
+      );
+    },
+    [updateMiningDraft]
+  );
+
+  const moveMiningButton = useCallback(
+    (buttonId: string, direction: -1 | 1) => {
+      updateMiningDraft((current) =>
+        moveMiningButtonDraft(current, buttonId, direction)
+      );
+    },
+    [updateMiningDraft]
+  );
+
+  const duplicateMiningButton = useCallback(async () => {
+    const next = duplicateSelectedMiningButtonDraft(
+      miningDraftRef.current,
+      t("settings.hoshidicts.mining.buttons.duplicateName", {
+        name: miningDraftRef.current.label
+      })
+    );
+    pendingMiningOptionsButtonIdRef.current = next.selectedButtonId;
+    updateMiningDraft(() => next);
+    await flushMining();
+  }, [flushMining, miningDraftRef, t, updateMiningDraft]);
+
+  const deleteMiningButton = useCallback(
+    (buttonId: string) => {
+      const next = deleteMiningButtonDraft(miningDraftRef.current, buttonId);
+      updateMiningDraft(() => next);
+      if (next.selectedButtonId) {
+        void loadMiningOptions(next.model || undefined);
+      } else {
+        miningOptionsRequestRef.current += 1;
+        setMiningOptions({
+          ...DEFAULT_MINING_OPTIONS,
+          suggestedFields: { ...DEFAULT_MINING_OPTIONS.suggestedFields },
+          resolvedFields: { ...DEFAULT_MINING_OPTIONS.resolvedFields },
+          suggestedFieldTemplates: {},
+          resolvedFieldTemplates: {}
+        });
+        setMiningOptionsLoading(false);
+      }
+    },
+    [loadMiningOptions, miningDraftRef, updateMiningDraft]
   );
 
   const setMiningField = useCallback(
@@ -928,7 +1054,8 @@ export function useHoshidictsSettingsController() {
     ? profileSwitching ||
       backupOperation !== null ||
       isScopedBusy(state, "mining") ||
-      miningSaving
+      miningSaving ||
+      miningOptionsLoading
     : true;
   const audioBusy = state
     ? profileSwitching ||
@@ -974,6 +1101,12 @@ export function useHoshidictsSettingsController() {
     miningOptionsLoading,
     miningSaveStatus,
     updateMiningDraft,
+    selectMiningButton,
+    addMiningButton,
+    setMiningButtonEnabled,
+    moveMiningButton,
+    duplicateMiningButton,
+    deleteMiningButton,
     setMiningModel,
     setMiningField,
     loadMiningOptions,

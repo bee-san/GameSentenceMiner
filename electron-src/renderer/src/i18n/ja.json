@@ -968,6 +968,23 @@
       "mining": {
         "title": "Ankiマイニングプロファイル",
         "enabled": "マイニングを有効化",
+        "buttons": {
+          "title": "Ankiボタン",
+          "help": "マイニング先ごとにボタンを作成します。ここでの順番がポップアップにも反映されます。",
+          "empty": "Ankiボタンはまだ設定されていません。",
+          "name": "ボタン名",
+          "newName": "新しいAnkiボタン",
+          "add": "ボタンを追加",
+          "duplicate": "{name}を複製",
+          "duplicateName": "{name}のコピー",
+          "enable": "{name}を有効化",
+          "disable": "{name}を無効化",
+          "enabledState": "有効",
+          "disabledState": "無効",
+          "moveUp": "{name}を上へ移動",
+          "moveDown": "{name}を下へ移動",
+          "delete": "{name}を削除"
+        },
         "checkingAnki": "AnkiConnectを確認中...",
         "ankiConnected": "AnkiConnectに接続済み",
         "ankiDisconnected": "AnkiConnectに未接続",

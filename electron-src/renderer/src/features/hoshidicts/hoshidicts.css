@@ -1345,6 +1345,82 @@
   font-size: 0.86rem;
 }
 
+.hoshidicts-anki-button-editor {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--gsm-border-default);
+  border-radius: 8px;
+  background: var(--gsm-surface-2);
+}
+
+.hoshidicts-anki-button-editor__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hoshidicts-anki-button-editor__heading h3,
+.hoshidicts-anki-button-editor__heading p {
+  margin: 0;
+}
+
+.hoshidicts-anki-button-editor__heading p {
+  margin-top: 4px;
+  color: var(--gsm-text-muted);
+  font-size: 0.8rem;
+}
+
+.hoshidicts-anki-button-list {
+  display: grid;
+  gap: 7px;
+}
+
+.hoshidicts-anki-button-list__row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.hoshidicts-window .hoshidicts-anki-button-list__select {
+  min-width: 0;
+  justify-content: flex-start;
+  overflow: hidden;
+  border-color: var(--gsm-border-default);
+  background: var(--gsm-surface-1);
+  color: var(--gsm-text-primary);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hoshidicts-window .hoshidicts-anki-button-list__select[aria-pressed="true"] {
+  border-color: var(--gsm-accent);
+  background: color-mix(in srgb, var(--gsm-accent) 12%, var(--gsm-surface-1));
+}
+
+.hoshidicts-anki-button-list__row[data-enabled="false"]
+  .hoshidicts-anki-button-list__select {
+  color: var(--gsm-text-muted);
+}
+
+.hoshidicts-anki-button-list__actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.hoshidicts-window .hoshidicts-anki-button-list__actions > .secondary {
+  min-width: 78px;
+}
+
+.hoshidicts-anki-button-editor__name {
+  max-width: 460px;
+}
+
 .hoshidicts-mining-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1736,6 +1812,19 @@
   .hoshidicts-section__status-actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .hoshidicts-anki-button-editor__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .hoshidicts-anki-button-list__row {
+    grid-template-columns: 1fr;
+  }
+
+  .hoshidicts-anki-button-list__actions {
+    justify-content: flex-end;
   }
 
   .hoshidicts-section--toolbar,
