@@ -22,9 +22,7 @@ function audioProfile(
 ) {
   return {
     version: 1,
-    enabled: true,
     autoPlay: false,
-    volume: 100,
     ...overrides,
     sources
   };
@@ -49,7 +47,12 @@ function createControllerHarness(options: Record<string, any> = {}) {
     dom = createDom(),
     profile = {},
     render = true,
-    sources = [{ id: "jisho", type: "jisho", url: "", voice: "" }],
+    sources = [{
+      id: "direct-audio",
+      type: "custom",
+      url: "https://audio.test/{term}.mp3",
+      voice: ""
+    }],
     term = result(),
     ...controllerOptions
   } = options;
@@ -107,7 +110,7 @@ describe("Hoshidicts audio client", () => {
     await expect(client.getCandidates({
       term: "食べる",
       reading: "たべる",
-      sourceId: "jpod101"
+      sourceId: "fast-audio"
     })).resolves.toEqual([{
       index: 3,
       name: "Female",
@@ -117,7 +120,7 @@ describe("Hoshidicts audio client", () => {
     await expect(client.getMedia({
       term: "食べる",
       reading: "たべる",
-      sourceId: "jpod101",
+      sourceId: "fast-audio",
       candidateIndex: 3,
       candidateId: CANDIDATE_ID
     })).resolves.toBe(audioBlob);
@@ -133,7 +136,7 @@ describe("Hoshidicts audio client", () => {
         body: JSON.stringify({
           term: "食べる",
           reading: "たべる",
-          sourceId: "jpod101"
+          sourceId: "fast-audio"
         })
       })
     );
@@ -148,12 +151,56 @@ describe("Hoshidicts audio client", () => {
         body: JSON.stringify({
           term: "食べる",
           reading: "たべる",
-          sourceId: "jpod101",
+          sourceId: "fast-audio",
           candidateIndex: 3,
           candidateId: CANDIDATE_ID
         })
       })
     );
+  });
+
+  it("preserves every candidate returned by the local audio API", async () => {
+    const dom = createDom();
+    const api = loadAudioModule(dom.window as unknown as Window);
+    const candidates = Array.from({ length: 33 }, (_value, index) => ({
+      index,
+      name: `Recording ${index}`,
+      candidateId: index.toString(16).padStart(64, "0")
+    }));
+    const client = api.createHoshidictsAudioClient({
+      fetch: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ candidates })
+      }))
+    });
+
+    await expect(client.getCandidates({
+      term: "食べる",
+      reading: "たべる",
+      sourceId: "fast-audio"
+    })).resolves.toEqual(candidates);
+  });
+
+  it("returns empty media responses without validating them in the client", async () => {
+    const dom = createDom();
+    const api = loadAudioModule(dom.window as unknown as Window);
+    const media = new Blob([], { type: "text/html" });
+    const client = api.createHoshidictsAudioClient({
+      fetch: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        blob: async () => media
+      }))
+    });
+
+    await expect(client.getMedia({
+      term: "食べる",
+      reading: "たべる",
+      sourceId: "fast-audio",
+      candidateIndex: 0,
+      candidateId: CANDIDATE_ID
+    })).resolves.toBe(media);
   });
 
   it("streams loopback candidates without buffering them through GSM", async () => {
@@ -225,7 +272,7 @@ describe("Hoshidicts audio controller", () => {
     controller.destroy();
   });
 
-  it("falls through ordered URL sources and remembers the playable candidate", async () => {
+  it("derives availability from ordered sources and plays at full volume", async () => {
     const play = vi.fn(async () => undefined);
     const pause = vi.fn();
     const revokeObjectURL = vi.fn();
@@ -241,15 +288,15 @@ describe("Hoshidicts audio controller", () => {
     const { button, controller, term } = createControllerHarness({
       client,
       sources: [
-        { id: "first", type: "jpod101", url: "", voice: "" },
-        { id: "second", type: "jisho", url: "", voice: "" }
+        { id: "first", type: "custom", url: "https://first.test/{term}", voice: "" },
+        { id: "second", type: "custom", url: "https://second.test/{term}", voice: "" }
       ],
-      profile: { volume: 40 },
+      profile: { enabled: false, volume: 40 },
       createAudioElement: () => playback,
       createObjectURL: () => "blob:pronunciation",
       revokeObjectURL
     });
-    expect(controller.getPreferences().volume).toBe(40);
+    expect(button.hidden).toBe(false);
 
     button.click();
     await flushPromises();
@@ -270,6 +317,7 @@ describe("Hoshidicts audio controller", () => {
       candidateId: CANDIDATE_ID
     });
     expect(button.dataset.state).toBe("playing");
+    expect(playback.volume).toBe(1);
     controller.destroy();
     expect(pause).toHaveBeenCalled();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:pronunciation");
@@ -290,8 +338,8 @@ describe("Hoshidicts audio controller", () => {
     const { button, controller } = createControllerHarness({
       client: { getCandidates, getMedia: vi.fn() },
       sources: [
-        { id: "first", type: "jpod101", url: "", voice: "" },
-        { id: "second", type: "jisho", url: "", voice: "" }
+        { id: "first", type: "custom", url: "https://first.test/{term}", voice: "" },
+        { id: "second", type: "custom-json", url: "https://second.test/{term}", voice: "" }
       ],
       fallbackTimeoutMs: 50,
       setTimeout,
@@ -313,31 +361,144 @@ describe("Hoshidicts audio controller", () => {
     controller.destroy();
   });
 
-  it("caps ordered fallback attempts across sources and candidates", async () => {
-    const getCandidates = vi.fn(async () => [
-      { index: 0, name: "First", candidateId: CANDIDATE_ID },
-      { index: 1, name: "Second", candidateId: SECOND_CANDIDATE_ID }
-    ]);
+  it("lets the total deadline interrupt immediately rejected candidates", async () => {
+    const candidates = Array.from({ length: 50_000 }, (_value, index) => ({
+      index,
+      name: `Recording ${index}`,
+      candidateId: index.toString(16).padStart(64, "0")
+    }));
     const getMedia = vi.fn(async () => {
       throw new Error("unplayable");
     });
     const { button, controller } = createControllerHarness({
+      client: {
+        getCandidates: vi.fn(async () => candidates),
+        getMedia
+      },
+      fallbackTimeoutMs: 1,
+      setTimeout,
+      clearTimeout
+    });
+
+    button.click();
+    await vi.waitFor(() => expect(button.dataset.state).toBe("error"));
+
+    expect(button.title).toMatch(/timed out/iu);
+    expect(getMedia.mock.calls.length).toBeLessThan(candidates.length);
+    controller.destroy();
+  });
+
+  it("does not resume a cancelled deadline checkpoint into TTS", async () => {
+    const dom = createDom();
+    const speak = vi.fn();
+    const cancel = vi.fn();
+    class FakeUtterance {
+      text: string;
+      constructor(text: string) {
+        this.text = text;
+      }
+    }
+    Object.assign(dom.window, {
+      SpeechSynthesisUtterance: FakeUtterance,
+      speechSynthesis: {
+        cancel,
+        getVoices: () => [],
+        speak
+      }
+    });
+    const sources = [
+      ...Array.from({ length: 31 }, (_value, index) => ({
+        id: `source-${index}`,
+        type: "custom",
+        url: `https://audio.test/${index}/{term}`,
+        voice: ""
+      })),
+      {
+        id: "tts",
+        type: "text-to-speech",
+        url: "",
+        voice: ""
+      }
+    ];
+    let releaseCheckpoint: (() => void) | null = null;
+    let timerId = 0;
+    const setTimeoutFn = vi.fn((callback: () => void, delay: number) => {
+      timerId += 1;
+      if (delay === 0) releaseCheckpoint = callback;
+      return timerId;
+    });
+    const play = vi.fn(async () => undefined);
+    const client = {
+      getCandidates: vi.fn(async ({ term, sourceId }: { term: string; sourceId: string }) =>
+        term === "new" && sourceId === "source-0"
+          ? [{ index: 0, name: "New", candidateId: CANDIDATE_ID }]
+          : []
+      ),
+      getMedia: vi.fn(async () => new Blob(["audio"], { type: "audio/mpeg" }))
+    };
+    const { controller } = createControllerHarness({
+      client,
+      dom,
+      render: false,
+      sources,
+      createAudioElement: () => audioElement({ play }),
+      createObjectURL: () => "blob:new",
+      revokeObjectURL: vi.fn(),
+      setTimeout: setTimeoutFn,
+      clearTimeout: vi.fn()
+    });
+    const oldButton = dom.window.document.createElement("button");
+    const newButton = dom.window.document.createElement("button");
+    controller.setRenderedResults([
+      { button: oldButton, result: result("old", "old") },
+      { button: newButton, result: result("new", "new") }
+    ]);
+
+    oldButton.click();
+    await vi.waitFor(() => expect(releaseCheckpoint).not.toBeNull());
+    newButton.click();
+    await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+    const resumeCancelledPlayback = releaseCheckpoint as unknown as () => void;
+    resumeCancelledPlayback();
+    await flushPromises();
+
+    expect(speak).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it("tries ordered fallback candidates without an attempt cap", async () => {
+    const sources = Array.from({ length: 13 }, (_value, index) => ({
+      id: `source-${index}`,
+      type: "custom",
+      url: `https://audio.test/${index}/{term}`,
+      voice: ""
+    }));
+    const getCandidates = vi.fn(async () => [
+      { index: 0, name: "Recording", candidateId: CANDIDATE_ID }
+    ]);
+    const getMedia = vi.fn(async ({ sourceId }: { sourceId: string }) => {
+      if (sourceId === sources[sources.length - 1].id) {
+        return new Blob(["audio"], { type: "audio/mpeg" });
+      }
+      throw new Error("unplayable");
+    });
+    const play = vi.fn(async () => undefined);
+    const { button, controller } = createControllerHarness({
       client: { getCandidates, getMedia },
-      sources: [
-        { id: "first", type: "jpod101", url: "", voice: "" },
-        { id: "second", type: "jisho", url: "", voice: "" },
-        { id: "third", type: "custom", url: "https://audio.test", voice: "" }
-      ],
-      maxFallbackAttempts: 3
+      sources,
+      createAudioElement: () => audioElement({ play }),
+      createObjectURL: () => "blob:last-candidate",
+      revokeObjectURL: vi.fn()
     });
 
     button.click();
     await vi.waitFor(() => {
-      expect(getCandidates).toHaveBeenCalledTimes(2);
-      expect(getMedia).toHaveBeenCalledTimes(3);
-      expect(button.dataset.state).toBe("error");
+      expect(getCandidates).toHaveBeenCalledTimes(13);
+      expect(getMedia).toHaveBeenCalledTimes(13);
+      expect(play).toHaveBeenCalledTimes(1);
+      expect(button.dataset.state).toBe("playing");
     });
-    expect(button.title).toMatch(/fallback limit/iu);
     controller.destroy();
   });
 
@@ -362,7 +523,7 @@ describe("Hoshidicts audio controller", () => {
     expect(getCandidates).toHaveBeenCalledWith({
       term: "食べる",
       reading: "たべる",
-      sourceId: "jisho"
+      sourceId: "direct-audio"
     }, expect.anything());
     expect(getMedia).toHaveBeenCalledWith(expect.objectContaining({
       term: "食べる",
@@ -371,7 +532,7 @@ describe("Hoshidicts audio controller", () => {
     controller.destroy();
   });
 
-  it("uses term and reading TTS locally without creating a mining selection", async () => {
+  it("uses term and reading TTS locally at full volume without a mining selection", async () => {
     const dom = createDom();
     const speak = vi.fn();
     const cancel = vi.fn();
@@ -404,7 +565,6 @@ describe("Hoshidicts audio controller", () => {
         url: "",
         voice: "haruka"
       }],
-      profile: { volume: 25 },
       term: result("食べた", "たべた")
     });
 
@@ -415,7 +575,7 @@ describe("Hoshidicts audio controller", () => {
     expect(utterances[0]).toMatchObject({
       text: "たべた",
       lang: "ja-JP",
-      volume: 0.25
+      volume: 1
     });
     expect(controller.getSelection(term)).toBeNull();
     controller.destroy();
@@ -446,7 +606,7 @@ describe("Hoshidicts audio controller", () => {
     await flushPromises();
     await vi.waitFor(() => {
       expect(controller.getSelection(term)).toEqual({
-        sourceId: "jisho",
+        sourceId: "direct-audio",
         candidateIndex: 0,
         candidateId: CANDIDATE_ID
       });
@@ -497,15 +657,13 @@ describe("Hoshidicts audio controller", () => {
     expect(play).toHaveBeenCalledTimes(2);
 
     const pauseCount = pause.mock.calls.length;
-    controller.updatePreferences({ volume: 20, autoPlay: false });
+    controller.updatePreferences({ autoPlay: false });
     expect(pause).toHaveBeenCalledTimes(pauseCount);
     expect(third.dataset.state).toBe("playing");
     controller.updatePreferences({
-      sources: [{ id: "jpod", type: "jpod101", url: "", voice: "" }]
+      sources: [{ id: "custom", type: "custom", url: "https://audio.test", voice: "" }]
     });
     expect(pause).toHaveBeenCalledTimes(pauseCount + 1);
-    controller.updatePreferences({ enabled: false });
-    expect(third.hidden).toBe(true);
     controller.destroy();
   });
 
@@ -523,12 +681,16 @@ describe("Hoshidicts audio controller", () => {
       appendButton: true,
       client,
       profile: { autoPlay: true },
-      sources: [{ id: "jpod", type: "jpod101", url: "", voice: "" }],
+      sources: [{
+        id: "remote-audio",
+        type: "custom-json",
+        url: "https://audio.test/list?term={term}",
+        voice: ""
+      }],
       createAudioElement: () => audioElement({ play }),
       createObjectURL: () => "blob:menu",
       revokeObjectURL: vi.fn(),
-      fallbackTimeoutMs: 1,
-      maxFallbackAttempts: 1
+      fallbackTimeoutMs: 1
     });
 
     button.dispatchEvent(new dom.window.MouseEvent("click", {
@@ -554,14 +716,14 @@ describe("Hoshidicts audio controller", () => {
 
     expect(client.getMedia).toHaveBeenCalledWith(
       expect.objectContaining({
-        sourceId: "jpod",
+        sourceId: "remote-audio",
         candidateIndex: 2,
         candidateId: SECOND_CANDIDATE_ID
       }),
       expect.objectContaining({ signal: expect.anything() })
     );
     expect(controller.getSelection(term)).toEqual({
-      sourceId: "jpod",
+      sourceId: "remote-audio",
       candidateIndex: 2,
       candidateId: SECOND_CANDIDATE_ID
     });

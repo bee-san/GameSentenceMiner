@@ -5810,9 +5810,7 @@
     function updateAudioPreferences(nextPreferences = {}) {
       const normalized = audioController.updatePreferences(nextPreferences);
       diagnostic("info", "audio-preferences.updated", {
-        enabled: normalized.enabled,
         autoPlay: normalized.autoPlay,
-        volume: normalized.volume,
         sourceCount: normalized.sources.length,
       });
       return normalized;

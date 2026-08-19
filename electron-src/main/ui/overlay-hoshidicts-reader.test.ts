@@ -628,10 +628,15 @@ describe("Hoshidicts safe popup rendering", () => {
     const configured = configureBootstrapReader();
     const profile = {
       version: 1,
-      enabled: true,
       autoPlay: true,
-      volume: 60,
-      sources: [{ id: "jisho", type: "jisho", url: "", voice: "" }]
+      sources: [
+        {
+          id: "remote-audio",
+          type: "custom",
+          url: "https://audio.test/{term}.mp3",
+          voice: ""
+        }
+      ]
     };
 
     configured.emit("hoshidicts-activation-key-state", true);
@@ -5053,7 +5058,7 @@ describe("Hoshidicts Shift-hover scanner", () => {
 
   it("updates audio action visibility when the configured source list changes", async () => {
     const empty = createReaderHarness({
-      audioPreferences: { enabled: true, sources: [] }
+      audioPreferences: { sources: [] }
     });
     await renderFirstLookup(empty);
     const emptyButton = empty.reader.getPopupElement()
@@ -5063,8 +5068,14 @@ describe("Hoshidicts Shift-hover scanner", () => {
 
     const harness = createReaderHarness({
       audioPreferences: {
-        enabled: true,
-        sources: [{ id: "jisho", type: "jisho", url: "", voice: "" }]
+        sources: [
+          {
+            id: "remote-audio",
+            type: "custom",
+            url: "https://audio.test/{term}.mp3",
+            voice: ""
+          }
+        ]
       }
     });
     await renderFirstLookup(harness);
@@ -5077,7 +5088,14 @@ describe("Hoshidicts Shift-hover scanner", () => {
     expect(audioButton.hidden).toBe(true);
 
     harness.reader.updateAudioPreferences({
-      sources: [{ id: "jisho", type: "jisho", url: "", voice: "" }]
+      sources: [
+        {
+          id: "remote-audio",
+          type: "custom",
+          url: "https://audio.test/{term}.mp3",
+          voice: ""
+        }
+      ]
     });
     expect(audioButton.hidden).toBe(false);
   });
@@ -5520,10 +5538,15 @@ describe("Hoshidicts Shift-hover scanner", () => {
       },
       audioPreferences: {
         version: 1,
-        enabled: true,
         autoPlay: false,
-        volume: 100,
-        sources: [{ id: "jisho", type: "jisho", url: "", voice: "" }]
+        sources: [
+          {
+            id: "remote-audio",
+            type: "custom",
+            url: "https://audio.test/{term}.mp3",
+            voice: ""
+          }
+        ]
       }
     });
     const { dom, reader } = harness;
@@ -9129,7 +9152,7 @@ describe("Hoshidicts Shift-hover scanner", () => {
   it("passes a successful pronunciation selection to mining", async () => {
     const mine = vi.fn(async () => ({ success: true, noteId: 123 }));
     const audioController = createAudioControllerStub({
-      sourceId: "jpod101",
+      sourceId: "remote-audio",
       candidateIndex: 2,
       candidateId: "a".repeat(64)
     });
@@ -9166,7 +9189,7 @@ describe("Hoshidicts Shift-hover scanner", () => {
         })
       }),
       audioSelection: {
-        sourceId: "jpod101",
+        sourceId: "remote-audio",
         candidateIndex: 2,
         candidateId: "a".repeat(64)
       }

@@ -323,7 +323,6 @@ describe('Hoshidicts manager full backups', () => {
         const audioProfile = {
             ...defaultHoshidictsAudioProfile(),
             autoPlay: true,
-            volume: 37,
             sources: [
                 {
                     id: 'local-audio',
@@ -337,7 +336,7 @@ describe('Hoshidicts manager full backups', () => {
         const persona = await source.createProfile('Persona');
         await source.setAudioProfile({
             ...audioProfile,
-            volume: 22,
+            autoPlay: false,
         });
         await source.setDictionaryEnabled(alpha!.id, true);
         await source.switchProfile('default');
@@ -546,10 +545,19 @@ describe('Hoshidicts manager full backups', () => {
             }),
         );
         await target.setMiningProfile(makeMiningProfile({ deck: 'Live Deck' }));
-        await target.setAudioProfile({
+        const targetAudioProfile = {
             ...defaultHoshidictsAudioProfile(),
-            volume: 64,
-        });
+            autoPlay: true,
+            sources: [
+                {
+                    id: 'live-audio',
+                    type: 'custom' as const,
+                    url: 'https://audio.test/{term}.mp3',
+                    voice: '',
+                },
+            ],
+        };
+        await target.setAudioProfile(targetAudioProfile);
         const custom = await target.getCustomDictionaryDocument();
         await target.saveCustomDictionary('犬, いぬ, dog\n', custom.revision);
         const targetSnapshot = await target.getSnapshot();
@@ -572,7 +580,7 @@ describe('Hoshidicts manager full backups', () => {
         expect(restoredSnapshot.dictionaries).toHaveLength(1);
         expect(restoredSnapshot.dictionaries[0].title).toBe('Target Dictionary');
         expect(restoredSnapshot.miningProfile.buttons[0].deck).toBe('Live Deck');
-        expect(restoredSnapshot.audioProfile.volume).toBe(64);
+        expect(restoredSnapshot.audioProfile).toEqual(targetAudioProfile);
         await expect(target.getCustomDictionaryDocument()).resolves.toMatchObject({
             text: '犬, いぬ, dog\n',
         });
