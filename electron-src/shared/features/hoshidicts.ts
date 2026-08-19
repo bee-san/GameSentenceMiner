@@ -1476,7 +1476,7 @@ function hoshidictsMiningValuesEqual(left: unknown, right: unknown): boolean {
         keys.length === Object.keys(right).length &&
         keys.every(
             (key) =>
-                Object.hasOwn(right, key) &&
+                Object.prototype.hasOwnProperty.call(right, key) &&
                 hoshidictsMiningValuesEqual(left[key], right[key])
         )
     );

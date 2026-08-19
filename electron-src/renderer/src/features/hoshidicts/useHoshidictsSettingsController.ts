@@ -7,6 +7,7 @@ import {
   DEFAULT_HOSHIDICTS_POPUP_HEIGHT_PX,
   DEFAULT_HOSHIDICTS_POPUP_WIDTH_PX,
   HOSHIDICTS_CHANNELS,
+  HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
   MAX_HOSHIDICTS_CUSTOM_POPUP_CSS_LENGTH,
   normalizeHoshidictsReaderPreferences,
   type HoshidictsActionResult,
@@ -541,9 +542,19 @@ export function useHoshidictsSettingsController() {
       button: "addToAnki" | "audio" | "customDefinition" | "viewInAnki",
       enabled: boolean
     ) => {
+      if (button === "addToAnki") {
+        updateMiningDraft((current) => ({
+          ...current,
+          buttons: current.buttons.map((preset) =>
+            preset.id === HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID
+              ? { ...preset, enabled }
+              : preset
+          )
+        }));
+      }
       updatePopupButtons({ [button]: enabled });
     },
-    [updatePopupButtons]
+    [updateMiningDraft, updatePopupButtons]
   );
 
   const setPopupCustomLinks = useCallback(

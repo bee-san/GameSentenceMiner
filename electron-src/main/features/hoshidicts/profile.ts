@@ -370,7 +370,7 @@ export function normalizeHoshidictsMiningProfile(
         label: '',
         icon: '',
     };
-    const buttons = value.buttons.map((button) => {
+    const buttons = Array.from(value.buttons, (button) => {
         const normalized = normalizeHoshidictsAnkiButton(button, defaults);
         if (ids.has(normalized.id)) {
             throw new Error('Hoshidicts Anki button ids must be unique.');

@@ -10,6 +10,7 @@ import {
     HOSHIDICTS_RECOMMENDED_DICTIONARY_IDS,
     MAX_HOSHIDICTS_CUSTOM_POPUP_CSS_LENGTH,
     MAX_HOSHIDICTS_TAB_GROUP_NAME_LENGTH,
+    type HoshidictsMiningProfile,
 } from '../../../shared/features/hoshidicts.js';
 
 vi.mock('electron', () => ({
@@ -1663,6 +1664,137 @@ describe('Hoshidicts mining profile', () => {
         expect(
             fs.readdirSync(path.join(baseDir, 'dictionaries', 'hoshidicts')).sort()
         ).toEqual(['audio-profile.json', 'manifest.json', 'mining-profile.json']);
+    });
+
+    it('migrates legacy Add to Anki visibility into the stable default button', async () => {
+        const baseDir = makeTempDir();
+        const { manager } = createHarness(baseDir);
+        writeProfileManifest(
+            manager,
+            {
+                ...makeHoshidictsReaderPreferences({
+                    popupButtons: {
+                        ...createDefaultHoshidictsPopupButtons(),
+                        addToAnki: false,
+                    },
+                }),
+            }
+        );
+        const manifest = readManifest(baseDir);
+        const {
+            id: _id,
+            enabled: _buttonEnabled,
+            label: _label,
+            icon: _icon,
+            ...legacyButton
+        } = defaultHoshidictsMiningProfile().buttons[0];
+        manifest.profiles[0].mining = {
+            ...legacyButton,
+            version: 3,
+            enabled: true,
+            deck: 'Legacy Mining',
+        };
+        writeManifest(baseDir, manifest);
+
+        const migrated = await manager.getSnapshot();
+
+        expect(migrated.miningProfile).toMatchObject({
+            version: 4,
+            enabled: true,
+            buttons: [
+                {
+                    id: 'add-to-anki',
+                    enabled: false,
+                    label: 'Add to Anki',
+                    icon: 'anki',
+                    deck: 'Legacy Mining',
+                },
+            ],
+        });
+
+        await manager.setLookupMode('hover');
+        expect(readActiveProfile(baseDir).mining).toEqual(migrated.miningProfile);
+        expect(
+            (await createHarness(baseDir).manager.getSnapshot()).miningProfile
+        ).toEqual(migrated.miningProfile);
+    });
+
+    it('uses the active reader visibility when a legacy mining profile is saved', async () => {
+        const baseDir = makeTempDir();
+        const { manager } = createHarness(baseDir);
+        await manager.setReaderPreferences(
+            makeHoshidictsReaderPreferences({
+                popupButtons: {
+                    ...createDefaultHoshidictsPopupButtons(),
+                    addToAnki: false,
+                },
+            })
+        );
+        const {
+            id: _id,
+            enabled: _buttonEnabled,
+            label: _label,
+            icon: _icon,
+            ...legacyProfile
+        } = defaultHoshidictsMiningProfile().buttons[0];
+
+        const snapshot = await manager.setMiningProfile({
+            ...legacyProfile,
+            version: 3,
+            enabled: true,
+        } as unknown as HoshidictsMiningProfile);
+
+        expect(snapshot.miningProfile.buttons).toHaveLength(1);
+        expect(snapshot.miningProfile.buttons[0]).toMatchObject({
+            id: 'add-to-anki',
+            enabled: false,
+        });
+    });
+
+    it('persists and reloads multiple ordered button configurations', async () => {
+        const baseDir = makeTempDir();
+        const { manager } = createHarness(baseDir);
+        const defaults = defaultHoshidictsMiningProfile().buttons[0];
+        const profile = {
+            version: 4 as const,
+            enabled: true,
+            buttons: [
+                {
+                    ...defaults,
+                    id: 'recognition',
+                    label: 'Recognition',
+                    deck: 'Mining::Recognition',
+                    model: 'Japanese',
+                    fields: { ...defaults.fields, expression: 'Front' },
+                    tags: ['recognition'],
+                },
+                {
+                    ...defaults,
+                    id: 'production',
+                    label: 'Production',
+                    icon: 'sparkles',
+                    deck: 'Mining::Production',
+                    model: 'Japanese Production',
+                    fields: { ...defaults.fields, expression: 'Answer' },
+                    tags: ['production'],
+                    fieldTemplates: {
+                        Answer: {
+                            value: '{reading}<br>{definition}',
+                            overwriteMode: 'overwrite' as const,
+                        },
+                    },
+                },
+            ],
+        };
+
+        const saved = await manager.setMiningProfile(profile);
+
+        expect(saved.miningProfile).toEqual(profile);
+        expect(readActiveProfile(baseDir).mining).toEqual(profile);
+        expect(readHoshidictsJson(baseDir, 'mining-profile.json')).toEqual(profile);
+        expect(
+            (await createHarness(baseDir).manager.getSnapshot()).miningProfile
+        ).toEqual(profile);
     });
 
     it('normalizes Yomitan duplicate options and rejects unsupported values', () => {

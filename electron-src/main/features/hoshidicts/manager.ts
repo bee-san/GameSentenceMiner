@@ -2413,10 +2413,13 @@ export class HoshidictsManager {
     }
 
     async setMiningProfile(value: unknown): Promise<HoshidictsManagerSnapshot> {
-        const mining = normalizeHoshidictsMiningProfile(value);
         await this.enqueue('saving', async () => {
             const manifest = await this.readManifest();
             const profile = cloneProfile(activeProfile(manifest));
+            const mining = normalizeHoshidictsMiningProfile(
+                value,
+                profile.reader.popupButtons.addToAnki
+            );
             profile.mining = mining;
             await this.atomicWriteManifest(
                 replaceActiveProfile(manifest, profile)

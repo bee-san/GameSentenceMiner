@@ -162,6 +162,10 @@ describe('Hoshidicts Anki button profiles', () => {
             'a malformed entry',
             { version: 4, enabled: true, buttons: [null] },
         ],
+        [
+            'a sparse entry',
+            { version: 4, enabled: true, buttons: Array(1) },
+        ],
     ])('rejects %s', (_case, profile) => {
         expect(() => normalizeHoshidictsMiningProfile(profile)).toThrow();
     });

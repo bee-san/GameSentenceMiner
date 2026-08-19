@@ -32,6 +32,7 @@ export type MiningProfileDraft = Omit<
 > & {
   version: 4;
   enabled: boolean;
+  selectedButtonId: string | null;
   tags: string;
   buttons: HoshidictsAnkiButton[];
 };
@@ -314,13 +315,16 @@ export function profileToDraft(
   profile: HoshidictsMiningProfile
 ): MiningProfileDraft {
   const copy = copyMiningProfile(profile);
-  const button =
+  const selectedButton =
     copy.buttons.find(({ id }) => id === HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID) ??
-    copyMiningProfile(DEFAULT_MINING_PROFILE).buttons[0];
+    copy.buttons[0];
+  const button =
+    selectedButton ?? copyMiningProfile(DEFAULT_MINING_PROFILE).buttons[0];
   return {
     ...button,
     version: 4,
     enabled: copy.enabled,
+    selectedButtonId: selectedButton?.id ?? null,
     buttons: copy.buttons,
     tags: button.tags.join(", ")
   };
@@ -333,12 +337,18 @@ export function draftToProfile(
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
-  const { version: _version, buttons, ...buttonDraft } = draft;
+  const {
+    version: _version,
+    buttons,
+    selectedButtonId,
+    ...buttonDraft
+  } = draft;
   const buttonIndex = buttons.findIndex(
-    ({ id }) => id === HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID
+    ({ id }) => id === selectedButtonId
   );
   const button = {
     ...buttonDraft,
+    id: selectedButtonId ?? draft.id,
     enabled: buttons[buttonIndex]?.enabled ?? true,
     fields: { ...draft.fields },
     fieldOverwriteModes: { ...draft.fieldOverwriteModes },
@@ -359,7 +369,7 @@ export function draftToProfile(
     enabled: draft.enabled,
     buttons:
       buttonIndex < 0
-        ? [...buttons, button]
+        ? buttons
         : buttons.map((existing, index) =>
             index === buttonIndex ? button : existing
           )

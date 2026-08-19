@@ -340,6 +340,41 @@ def test_profile_v4_loads_the_stable_default_button_for_legacy_mining_calls(tmp_
     assert profile["model"] == "Japanese Production"
 
 
+def test_profile_v4_uses_the_first_enabled_button_when_the_default_is_absent(tmp_path):
+    saved = tmp_path / "mining-profile.json"
+    saved.write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "enabled": True,
+                "buttons": [
+                    {
+                        **make_mining_profile(deck="Recognition"),
+                        "id": "recognition",
+                        "enabled": False,
+                        "label": "Recognition",
+                        "icon": "anki",
+                    },
+                    {
+                        **make_mining_profile(deck="Production"),
+                        "id": "production",
+                        "enabled": True,
+                        "label": "Production",
+                        "icon": "sparkles",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profile = hoshidicts_mining.load_hoshidicts_mining_profile(saved)
+
+    assert profile["version"] == 3
+    assert profile["enabled"] is True
+    assert profile["deck"] == "Production"
+
+
 def test_profile_v3_normalizes_target_field_templates_without_trimming_values():
     default_profile = hoshidicts_mining.default_hoshidicts_mining_profile()
     assert default_profile["version"] == 3

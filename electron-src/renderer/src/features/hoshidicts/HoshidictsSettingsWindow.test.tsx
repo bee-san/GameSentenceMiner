@@ -1845,6 +1845,33 @@ describe("HoshidictsSettingsWindow", () => {
     );
   });
 
+  it("keeps the legacy Add to Anki toggle aligned with the default preset", async () => {
+    vi.useFakeTimers();
+    await render();
+    await openDesign();
+
+    await flushAfter(() =>
+      container
+        .querySelector<HTMLInputElement>("#hoshidicts-popup-button-add-to-anki")
+        ?.click()
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.setReaderPreferences,
+      expect.objectContaining({
+        popupButtons: expect.objectContaining({ addToAnki: false })
+      })
+    );
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.setMiningProfile,
+      expect.objectContaining({
+        buttons: expect.arrayContaining([
+          expect.objectContaining({ id: "add-to-anki", enabled: false })
+        ])
+      })
+    );
+  });
+
   it("controls the popup buttons and custom links", async () => {
     vi.useFakeTimers();
     await render();
@@ -2377,14 +2404,13 @@ describe("HoshidictsSettingsWindow", () => {
   it("falls back to persisted target fields offline and preserves explicit blanks", async () => {
     const offlineState: HoshidictsDesktopSnapshot = {
       ...baseState,
-      miningProfile: {
-        ...baseState.miningProfile,
+      miningProfile: makeHoshidictsMiningProfile({
         model: "Offline",
         fieldTemplates: {
           Front: { value: "", overwriteMode: "coalesce" },
           Note: { value: "x", overwriteMode: "append" }
         }
-      }
+      })
     };
     ipc.configure({
       state: offlineState,
@@ -2418,11 +2444,10 @@ describe("HoshidictsSettingsWindow", () => {
   it("shows normalized legacy target fields while Anki is offline", async () => {
     const offlineState: HoshidictsDesktopSnapshot = {
       ...baseState,
-      miningProfile: {
-        ...baseState.miningProfile,
+      miningProfile: makeHoshidictsMiningProfile({
         model: "Offline legacy",
         fields: {
-          ...baseState.miningProfile.fields,
+          ...baseState.miningProfile.buttons[0].fields,
           expression: "Front",
           reading: "Reading",
           definition: "Front",
@@ -2430,12 +2455,12 @@ describe("HoshidictsSettingsWindow", () => {
         },
         disabledFields: ["reading"],
         fieldOverwriteModes: {
-          ...baseState.miningProfile.fieldOverwriteModes,
+          ...baseState.miningProfile.buttons[0].fieldOverwriteModes,
           expression: "append",
           definition: "overwrite"
         },
         fieldTemplates: null
-      }
+      })
     };
     ipc.configure({
       state: offlineState,
@@ -2474,13 +2499,12 @@ describe("HoshidictsSettingsWindow", () => {
     vi.useFakeTimers();
     const caseChangedState: HoshidictsDesktopSnapshot = {
       ...baseState,
-      miningProfile: {
-        ...baseState.miningProfile,
+      miningProfile: makeHoshidictsMiningProfile({
         model: "Case changed",
         fieldTemplates: {
           front: { value: "x", overwriteMode: "append" }
         }
-      }
+      })
     };
     ipc.configure({
       state: caseChangedState,

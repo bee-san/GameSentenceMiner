@@ -160,7 +160,7 @@ def normalize_hoshidicts_mining_profile(value: Any) -> dict[str, Any]:
         if not buttons:
             value = {**default_hoshidicts_mining_profile(), "enabled": False}
         else:
-            default_button = next(
+            selected_button = next(
                 (
                     button
                     for button in buttons
@@ -168,12 +168,17 @@ def normalize_hoshidicts_mining_profile(value: Any) -> dict[str, Any]:
                 ),
                 None,
             )
-            if default_button is None:
-                raise HoshidictsMiningError("Hoshidicts default Anki button is missing.")
+            if selected_button is None:
+                selected_button = next(
+                    (button for button in buttons if isinstance(button, dict) and button.get("enabled") is not False),
+                    next((button for button in buttons if isinstance(button, dict)), None),
+                )
+            if selected_button is None:
+                raise HoshidictsMiningError("Hoshidicts Anki button profile is invalid.")
             value = {
-                **default_button,
+                **selected_button,
                 "version": HOSHIDICTS_MINING_PROFILE_VERSION,
-                "enabled": value.get("enabled") is not False and default_button.get("enabled") is not False,
+                "enabled": value.get("enabled") is not False and selected_button.get("enabled") is not False,
             }
     if value.get("version", HOSHIDICTS_MINING_PROFILE_VERSION) != HOSHIDICTS_MINING_PROFILE_VERSION:
         raise HoshidictsMiningError("Hoshidicts mining profile version is unsupported.")
