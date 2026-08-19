@@ -50,6 +50,33 @@ def make_mining_profile(**overrides):
     return profile
 
 
+def make_anki_button(
+    button_id="add-to-anki",
+    *,
+    label=None,
+    icon="anki",
+    enabled=True,
+    **overrides,
+):
+    profile = make_mining_profile(**overrides)
+    profile.pop("version")
+    return {
+        **profile,
+        "id": button_id,
+        "enabled": enabled,
+        "label": label or button_id,
+        "icon": icon,
+    }
+
+
+def make_mining_profile_document(*buttons, enabled=True):
+    return {
+        "version": 4,
+        "enabled": enabled,
+        "buttons": list(buttons) if buttons else [make_anki_button(label="Add to Anki")],
+    }
+
+
 def make_field_templates(templates):
     """Per-target templates from ``{field: value}`` or ``{field: (value, mode)}``."""
     return {
@@ -209,6 +236,33 @@ class FakeAnki:
 
 
 def wire(monkeypatch, fake_anki, profile=None, config=None):
+    supplied_profile = profile or make_mining_profile()
+    if supplied_profile.get("version") == 4:
+        document = supplied_profile
+        legacy_profile = hoshidicts_mining._legacy_hoshidicts_anki_button(document)
+    else:
+        legacy_profile = supplied_profile
+        selected_model = legacy_profile["model"]
+        if selected_model and selected_model.casefold() not in {model.casefold() for model in fake_anki.model_names}:
+            fake_anki.model_names.append(selected_model)
+        document = make_mining_profile_document(
+            make_anki_button(
+                deck=legacy_profile["deck"],
+                model=legacy_profile["model"],
+                fields=legacy_profile["fields"],
+                disabledFields=legacy_profile["disabledFields"],
+                fieldTemplates=legacy_profile["fieldTemplates"],
+                tags=legacy_profile["tags"],
+                checkForDuplicates=legacy_profile["checkForDuplicates"],
+                duplicateScope=legacy_profile["duplicateScope"],
+                duplicateScopeCheckAllModels=legacy_profile["duplicateScopeCheckAllModels"],
+                duplicateBehavior=legacy_profile["duplicateBehavior"],
+                fieldOverwriteModes=legacy_profile["fieldOverwriteModes"],
+                enabled=legacy_profile["enabled"],
+                label="Add to Anki",
+            ),
+            enabled=legacy_profile["enabled"],
+        )
     monkeypatch.setattr(hoshidicts_mining, "_status_cache_key", None)
     monkeypatch.setattr(hoshidicts_mining, "_status_cache_value", None)
     monkeypatch.setattr(hoshidicts_mining, "_status_cache_expires_at", 0.0)
@@ -216,7 +270,12 @@ def wire(monkeypatch, fake_anki, profile=None, config=None):
     monkeypatch.setattr(
         hoshidicts_mining,
         "load_hoshidicts_mining_profile",
-        lambda: profile or make_mining_profile(),
+        lambda: legacy_profile,
+    )
+    monkeypatch.setattr(
+        hoshidicts_mining,
+        "load_hoshidicts_mining_profile_document",
+        lambda: document,
     )
     monkeypatch.setattr(hoshidicts_anki, "get_anki_module", lambda: fake_anki)
 

@@ -52,11 +52,6 @@ const CUSTOM_POPUP_CSS_PLACEHOLDER = `:scope {
 
 const POPUP_BUTTON_CHOICES = [
   {
-    id: "addToAnki",
-    inputId: "hoshidicts-popup-button-add-to-anki",
-    labelKey: "settings.hoshidicts.reader.popupButtons.addToAnki"
-  },
-  {
     id: "audio",
     inputId: "hoshidicts-popup-button-audio",
     labelKey: "settings.hoshidicts.reader.popupButtons.audio"

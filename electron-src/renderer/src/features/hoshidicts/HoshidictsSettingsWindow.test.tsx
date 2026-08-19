@@ -144,6 +144,13 @@ describe("HoshidictsSettingsWindow", () => {
     return calls[calls.length - 1];
   };
 
+  const lastMiningButton = (): Record<string, unknown> | undefined => {
+    const profile = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1] as
+      | { buttons?: Record<string, unknown>[] }
+      | undefined;
+    return profile?.buttons?.[0];
+  };
+
   it("shows the compact profile control and switches or clones profiles", async () => {
     const profileState: HoshidictsDesktopSnapshot = {
       ...baseState,
@@ -1838,14 +1845,25 @@ describe("HoshidictsSettingsWindow", () => {
     );
   });
 
+  it("keeps Anki button management in Mining instead of Design", async () => {
+    await render();
+    await openDesign();
+
+    expect(
+      container.querySelector("#hoshidicts-popup-button-add-to-anki")
+    ).toBeNull();
+
+    await openMining();
+    expect(
+      container.querySelector('[data-anki-button-id="add-to-anki"]')
+    ).not.toBeNull();
+  });
+
   it("controls the popup buttons and custom links", async () => {
     vi.useFakeTimers();
     await render();
     await openDesign();
 
-    const addToAnki = container.querySelector<HTMLInputElement>(
-      "#hoshidicts-popup-button-add-to-anki"
-    );
     const audio = container.querySelector<HTMLInputElement>(
       "#hoshidicts-popup-button-audio"
     );
@@ -1856,7 +1874,6 @@ describe("HoshidictsSettingsWindow", () => {
       "#hoshidicts-popup-button-view-in-anki"
     );
 
-    expect(addToAnki?.checked).toBe(true);
     expect(audio?.checked).toBe(true);
     expect(customDefinition?.checked).toBe(true);
     expect(viewInAnki?.checked).toBe(false);
@@ -2340,7 +2357,8 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      undefined
+      undefined,
+      "add-to-anki"
     );
     expect(invokeMock).not.toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.setMiningProfile,
@@ -2367,17 +2385,848 @@ describe("HoshidictsSettingsWindow", () => {
     );
   });
 
+  it("lists configured Anki buttons and loads selectors for the selected button", async () => {
+    const defaultButton = makeHoshidictsMiningProfile({
+      model: "Kiku",
+      deck: "Default"
+    }).buttons[0];
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: {
+          version: 4,
+          enabled: true,
+          buttons: [
+            defaultButton,
+            {
+              ...defaultButton,
+              id: "recognition",
+              label: "Recognition",
+              model: "Lapis",
+              deck: "Recognition"
+            }
+          ]
+        }
+      }),
+      handlers: {
+        [HOSHIDICTS_CHANNELS.getMiningOptions]: (_model, buttonId) =>
+          makeHoshidictsMiningOptions({
+            decks:
+              buttonId === "recognition"
+                ? ["Recognition", "Default"]
+                : ["Default", "Mining"],
+            selectedNoteType: buttonId === "recognition" ? "Lapis" : "Kiku"
+          })
+      }
+    });
+
+    await render();
+    await openMining();
+
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          ".hoshidicts-anki-button-list__select"
+        )
+      ).map((button) => button.textContent)
+    ).toEqual(["Add to Anki", "Recognition"]);
+
+    await clickAndSettle(
+      container.querySelector<HTMLButtonElement>(
+        '.hoshidicts-anki-button-list__select[data-anki-button-id="recognition"]'
+      )
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.getMiningOptions,
+      "Lapis",
+      "recognition"
+    );
+    expect(
+      container.querySelector<HTMLSelectElement>("#hoshidicts-mining-deck")?.value
+    ).toBe("Recognition");
+    expect(
+      container.querySelector<HTMLInputElement>("#hoshidicts-mining-button-label")
+        ?.value
+    ).toBe("Recognition");
+  });
+
+  it("disables mining mutation and configuration controls while button options load", async () => {
+    const recognitionOptions = deferred<HoshidictsMiningOptions>();
+    const defaultButton = makeHoshidictsMiningProfile().buttons[0];
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: {
+          version: 4,
+          enabled: true,
+          buttons: [
+            defaultButton,
+            {
+              ...defaultButton,
+              id: "recognition",
+              label: "Recognition",
+              deck: "Recognition"
+            }
+          ]
+        }
+      }),
+      handlers: {
+        [HOSHIDICTS_CHANNELS.getMiningOptions]: (_model, buttonId) =>
+          buttonId === "recognition" ? recognitionOptions.promise : undefined
+      }
+    });
+    await render();
+    await openMining();
+
+    await settle(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[data-anki-button-id="recognition"]'
+        )
+        ?.click();
+    }, 2);
+
+    const guardedControls = () =>
+      [
+        "#hoshidicts-mining-enabled",
+        "#hoshidicts-mining-button-label",
+        "#hoshidicts-mining-deck",
+        "#hoshidicts-mining-model",
+        "#hoshidicts-mining-tags",
+        "#hoshidicts-mining-check-duplicates",
+        '[aria-label="Disable Recognition"]',
+        '[aria-label="Duplicate Recognition"]',
+        '[aria-label="Move Recognition up"]',
+        '[aria-label="Delete Recognition"]'
+      ].map((selector) =>
+        container.querySelector<
+          HTMLInputElement | HTMLSelectElement | HTMLButtonElement
+        >(selector)
+      );
+    expect(guardedControls().every((control) => control?.disabled)).toBe(true);
+
+    await settle(() => {
+      recognitionOptions.resolve(
+        makeHoshidictsMiningOptions({
+          decks: ["Recognition", "Default"]
+        })
+      );
+    }, 5);
+
+    expect(guardedControls().every((control) => !control?.disabled)).toBe(true);
+  });
+
+  it("preserves a valid selected Anki button across clean external synchronization", async () => {
+    vi.useFakeTimers();
+    const defaultButton = makeHoshidictsMiningProfile().buttons[0];
+    const profile = {
+      version: 4 as const,
+      enabled: true,
+      buttons: [
+        defaultButton,
+        {
+          ...defaultButton,
+          id: "recognition",
+          label: "Recognition",
+          deck: "Recognition"
+        }
+      ]
+    };
+    ipc.configure({
+      state: makeHoshidictsSnapshot({ miningProfile: profile })
+    });
+    await render();
+    await openMining();
+    await clickAndSettle(
+      container.querySelector<HTMLButtonElement>(
+        '[data-anki-button-id="recognition"]'
+      )
+    );
+    await act(flushAutosave);
+
+    await settle(() => {
+      ipc.emit(
+        HOSHIDICTS_CHANNELS.progress,
+        makeHoshidictsSnapshot({
+          revision: ipc.nextRevision(),
+          miningProfile: {
+            ...profile,
+            buttons: profile.buttons.map((button) =>
+              button.id === "recognition"
+                ? { ...button, label: "Recognition refreshed" }
+                : button
+            )
+          }
+        })
+      );
+    }, 2);
+
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        '[data-anki-button-id="recognition"]'
+      )?.getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(
+      container.querySelector<HTMLInputElement>("#hoshidicts-mining-button-label")
+        ?.value
+    ).toBe("Recognition refreshed");
+
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        revision: ipc.nextRevision(),
+        miningProfile: {
+          ...profile,
+          buttons: [defaultButton]
+        }
+      })
+    });
+    await settle(() => window.dispatchEvent(new Event("focus")), 5);
+
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        '[data-anki-button-id="add-to-anki"]'
+      )?.getAttribute("aria-pressed")
+    ).toBe("true");
+  });
+
+  it("ignores options for a button removed by a clean focus refresh", async () => {
+    const recognitionOptions = deferred<HoshidictsMiningOptions>();
+    const defaultButton = makeHoshidictsMiningProfile({
+      model: "Kiku",
+      deck: "Default"
+    }).buttons[0];
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: {
+          version: 4,
+          enabled: true,
+          buttons: [
+            defaultButton,
+            {
+              ...defaultButton,
+              id: "recognition",
+              label: "Recognition",
+              model: "Lapis",
+              deck: "Recognition"
+            }
+          ]
+        }
+      }),
+      handlers: {
+        [HOSHIDICTS_CHANNELS.getMiningOptions]: (_model, buttonId) =>
+          buttonId === "recognition"
+            ? recognitionOptions.promise
+            : makeHoshidictsMiningOptions({
+                decks: ["Default"],
+                selectedNoteType: "Kiku"
+              })
+      }
+    });
+    await render();
+    await openMining();
+    await settle(() => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-anki-button-id="recognition"]'
+      )?.click();
+    }, 2);
+
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        revision: ipc.nextRevision(),
+        miningProfile: {
+          version: 4,
+          enabled: true,
+          buttons: [defaultButton]
+        }
+      })
+    });
+    await settle(() => window.dispatchEvent(new Event("focus")), 5);
+    expect(container.querySelector<HTMLButtonElement>(
+      '[data-anki-button-id="add-to-anki"]'
+    )?.getAttribute("aria-pressed")).toBe("true");
+
+    await settle(() => {
+      recognitionOptions.resolve(makeHoshidictsMiningOptions({
+        decks: ["Recognition"],
+        selectedNoteType: "Lapis"
+      }));
+    }, 5);
+
+    expect(Array.from(
+      container.querySelectorAll<HTMLOptionElement>(
+        "#hoshidicts-mining-deck option"
+      )
+    ).map((option) => option.value)).toEqual(["Default"]);
+  });
+
+  it("keeps Anki options synchronized with clean progress snapshots", async () => {
+    const staleOptions = deferred<HoshidictsMiningOptions>();
+    const defaultButton = makeHoshidictsMiningProfile({
+      model: "Kiku",
+      deck: "Default"
+    }).buttons[0];
+    const recognitionButton = {
+      ...defaultButton,
+      id: "recognition",
+      label: "Recognition",
+      model: "Kiku",
+      deck: "Recognition"
+    };
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: {
+          version: 4,
+          enabled: true,
+          buttons: [defaultButton, recognitionButton]
+        }
+      }),
+      handlers: {
+        [HOSHIDICTS_CHANNELS.getMiningOptions]: (model, buttonId) => {
+          if (buttonId === "recognition" && model === "Kiku") {
+            return staleOptions.promise;
+          }
+          if (buttonId === "recognition") {
+            return makeHoshidictsMiningOptions({
+              decks: ["Lapis deck"],
+              selectedNoteType: "Lapis"
+            });
+          }
+          return makeHoshidictsMiningOptions({
+            decks: ["Default"],
+            selectedNoteType: "Kiku"
+          });
+        }
+      }
+    });
+    await render();
+    await openMining();
+    await settle(() => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-anki-button-id="recognition"]'
+      )?.click();
+    }, 2);
+
+    await settle(() => {
+      ipc.emit(
+        HOSHIDICTS_CHANNELS.progress,
+        makeHoshidictsSnapshot({
+          revision: ipc.nextRevision(),
+          miningProfile: {
+            version: 4,
+            enabled: true,
+            buttons: [
+              defaultButton,
+              {
+                ...recognitionButton,
+                model: "Lapis",
+                deck: "Lapis deck"
+              }
+            ]
+          }
+        })
+      );
+    }, 5);
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.getMiningOptions,
+      "Lapis",
+      "recognition"
+    );
+    expect(
+      container.querySelector<HTMLSelectElement>("#hoshidicts-mining-deck")?.value
+    ).toBe("Lapis deck");
+
+    await settle(() => {
+      staleOptions.resolve(
+        makeHoshidictsMiningOptions({
+          decks: ["Stale deck"],
+          selectedNoteType: "Kiku"
+        })
+      );
+    }, 5);
+    expect(
+      container.querySelector<HTMLSelectElement>("#hoshidicts-mining-deck")?.value
+    ).toBe("Lapis deck");
+
+    await settle(() => {
+      ipc.emit(
+        HOSHIDICTS_CHANNELS.progress,
+        makeHoshidictsSnapshot({
+          revision: ipc.nextRevision(),
+          miningProfile: {
+            version: 4,
+            enabled: true,
+            buttons: [defaultButton]
+          }
+        })
+      );
+    }, 5);
+
+    expect(container.querySelector<HTMLButtonElement>(
+      '[data-anki-button-id="add-to-anki"]'
+    )?.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      container.querySelector<HTMLSelectElement>("#hoshidicts-mining-deck")?.value
+    ).toBe("Default");
+  });
+
+  it("persists a new Anki button before loading its per-button options", async () => {
+    const pendingSave = deferred<HoshidictsActionResult>();
+    ipc.configure({
+      handlers: {
+        [HOSHIDICTS_CHANNELS.setMiningProfile]: () => pendingSave.promise
+      }
+    });
+    await render();
+    await openMining();
+    invokeMock.mockClear();
+
+    await settle(() => {
+      container
+        .querySelector<HTMLButtonElement>("#hoshidicts-mining-add-button")
+        ?.click();
+    }, 1);
+
+    expect(callsFor(HOSHIDICTS_CHANNELS.setMiningProfile)).toHaveLength(1);
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(0);
+
+    const savedProfile = callsFor(HOSHIDICTS_CHANNELS.setMiningProfile)[0]?.[1] as
+      | HoshidictsDesktopSnapshot["miningProfile"]
+      | undefined;
+    await settle(() => {
+      pendingSave.resolve({
+        success: true,
+        state: makeHoshidictsSnapshot({
+          revision: ipc.nextRevision(),
+          miningProfile: savedProfile
+        })
+      });
+    }, 5);
+
+    const saveIndex = invokeMock.mock.calls.findIndex(
+      ([channel]) => channel === HOSHIDICTS_CHANNELS.setMiningProfile
+    );
+    const optionsIndex = invokeMock.mock.calls.findIndex(
+      ([channel]) => channel === HOSHIDICTS_CHANNELS.getMiningOptions
+    );
+    expect(optionsIndex).toBeGreaterThan(saveIndex);
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.getMiningOptions,
+      undefined,
+      "anki-button"
+    );
+  });
+
+  it("loads new-button options after a failed save later succeeds", async () => {
+    vi.useFakeTimers();
+    let saveAttempts = 0;
+    ipc.configure({
+      handlers: {
+        [HOSHIDICTS_CHANNELS.setMiningProfile]: (miningProfile) => {
+          saveAttempts += 1;
+          if (saveAttempts === 1) {
+            throw new Error("Save failed.");
+          }
+          return {
+            success: true,
+            state: makeHoshidictsSnapshot({
+              revision: ipc.nextRevision(),
+              miningProfile: miningProfile as HoshidictsDesktopSnapshot["miningProfile"]
+            })
+          };
+        }
+      }
+    });
+    await render();
+    await openMining();
+    invokeMock.mockClear();
+
+    await settle(() => {
+      container
+        .querySelector<HTMLButtonElement>("#hoshidicts-mining-add-button")
+        ?.click();
+    }, 5);
+
+    expect(saveAttempts).toBe(1);
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(0);
+
+    await flushAfter(() => {
+      setInputValue(
+        container.querySelector<HTMLInputElement>(
+          "#hoshidicts-mining-button-label"
+        ),
+        "Recovered button"
+      );
+    });
+    await settle();
+    await flushAfter();
+
+    expect(saveAttempts).toBe(2);
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.getMiningOptions,
+      undefined,
+      "anki-button"
+    );
+  });
+
+  it("does not query options for an unsaved generated button", async () => {
+    ipc.configure({
+      handlers: {
+        [HOSHIDICTS_CHANNELS.setMiningProfile]: () => {
+          throw new Error("Save failed.");
+        }
+      }
+    });
+    await render();
+    await openMining();
+    invokeMock.mockClear();
+
+    await settle(() => {
+      container
+        .querySelector<HTMLButtonElement>("#hoshidicts-mining-add-button")
+        ?.click();
+    }, 5);
+    expect(callsFor(HOSHIDICTS_CHANNELS.setMiningProfile)).toHaveLength(1);
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(0);
+
+    await settle(() => window.dispatchEvent(new Event("focus")), 5);
+    await clickAndSettle(
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.includes("Refresh Anki")
+      )
+    );
+
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(0);
+  });
+
+  it("adds and renames an independently configured Anki button", async () => {
+    vi.useFakeTimers();
+    await render();
+    await openMining();
+
+    await settle(() => {
+      container
+        .querySelector<HTMLButtonElement>("#hoshidicts-mining-add-button")
+        ?.click();
+    });
+
+    expect(
+      container.querySelector<HTMLInputElement>("#hoshidicts-mining-button-label")
+        ?.value
+    ).toBe("New Anki button");
+
+    await flushAfter(() => {
+      setInputValue(
+        container.querySelector<HTMLInputElement>(
+          "#hoshidicts-mining-button-label"
+        ),
+        "Recognition"
+      );
+      setSelectValue(
+        container.querySelector<HTMLSelectElement>("#hoshidicts-mining-deck"),
+        "Mining"
+      );
+      setSelectValue(
+        container.querySelector<HTMLSelectElement>("#hoshidicts-mining-model"),
+        "Lapis"
+      );
+    });
+    await settle();
+    await flushAfter();
+
+    const profile = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1] as {
+      buttons: Array<Record<string, unknown>>;
+    };
+    expect(profile.buttons).toHaveLength(2);
+    expect(profile.buttons[0]).toMatchObject({
+      id: "add-to-anki",
+      label: "Add to Anki"
+    });
+    expect(profile.buttons[1]).toMatchObject({
+      id: "anki-button",
+      label: "Recognition",
+      deck: "Mining",
+      model: "Lapis"
+    });
+    expect(
+      container.querySelector<HTMLInputElement>("#hoshidicts-mining-button-label")
+        ?.value
+    ).toBe("Recognition");
+  });
+
+  it("keeps a blank Anki button rename row and actions accessible", async () => {
+    vi.useFakeTimers();
+    await render();
+    await openMining();
+
+    await settle(() => {
+      setInputValue(
+        container.querySelector<HTMLInputElement>(
+          "#hoshidicts-mining-button-label"
+        ),
+        " \t "
+      );
+    }, 1);
+
+    const row = container.querySelector<HTMLElement>(
+      '.hoshidicts-anki-button-list__row[data-enabled="true"]'
+    );
+    expect(
+      row?.querySelector<HTMLButtonElement>(
+        ".hoshidicts-anki-button-list__select"
+      )?.textContent
+    ).toBe("Add to Anki");
+    expect(
+      row?.querySelector<HTMLButtonElement>(
+        '[aria-label="Duplicate Add to Anki"]'
+      )
+    ).not.toBeNull();
+    expect(
+      row?.querySelector<HTMLButtonElement>('[aria-label="Delete Add to Anki"]')
+    ).not.toBeNull();
+
+    await act(flushAutosave);
+
+    expect(lastMiningButton()?.label).toBe("Add to Anki");
+    expect(
+      container.querySelector<HTMLInputElement>("#hoshidicts-mining-button-label")
+        ?.value
+    ).toBe("Add to Anki");
+  });
+
+  it("enables and reorders each Anki button independently", async () => {
+    vi.useFakeTimers();
+    const defaultButton = makeHoshidictsMiningProfile().buttons[0];
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: {
+          version: 4,
+          enabled: true,
+          buttons: [
+            defaultButton,
+            {
+              ...defaultButton,
+              id: "recognition",
+              label: "Recognition",
+              deck: "Recognition"
+            }
+          ]
+        }
+      })
+    });
+    await render();
+    await openMining();
+
+    await flushAfter(() => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Disable Recognition"]')
+        ?.click();
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Move Recognition up"]')
+        ?.click();
+    });
+
+    const profile = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1] as {
+      buttons: Array<{ id: string; enabled: boolean }>;
+    };
+    expect(profile.buttons.map(({ id }) => id)).toEqual([
+      "recognition",
+      "add-to-anki"
+    ]);
+    expect(profile.buttons[0].enabled).toBe(false);
+    expect(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Enable Recognition"]'
+      )
+    ).not.toBeNull();
+  });
+
+  it("persists a duplicated Anki button before loading its per-button options", async () => {
+    const pendingSave = deferred<HoshidictsActionResult>();
+    ipc.configure({
+      handlers: {
+        [HOSHIDICTS_CHANNELS.setMiningProfile]: () => pendingSave.promise
+      }
+    });
+    await render();
+    await openMining();
+    invokeMock.mockClear();
+
+    await settle(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Duplicate Add to Anki"]'
+        )
+        ?.click();
+    }, 1);
+
+    expect(callsFor(HOSHIDICTS_CHANNELS.setMiningProfile)).toHaveLength(1);
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(0);
+
+    const savedProfile = callsFor(HOSHIDICTS_CHANNELS.setMiningProfile)[0]?.[1] as
+      | HoshidictsDesktopSnapshot["miningProfile"]
+      | undefined;
+    await settle(() => {
+      pendingSave.resolve({
+        success: true,
+        state: makeHoshidictsSnapshot({
+          revision: ipc.nextRevision(),
+          miningProfile: savedProfile
+        })
+      });
+    }, 5);
+
+    const saveIndex = invokeMock.mock.calls.findIndex(
+      ([channel]) => channel === HOSHIDICTS_CHANNELS.setMiningProfile
+    );
+    const optionsIndex = invokeMock.mock.calls.findIndex(
+      ([channel]) => channel === HOSHIDICTS_CHANNELS.getMiningOptions
+    );
+    expect(optionsIndex).toBeGreaterThan(saveIndex);
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.getMiningOptions,
+      undefined,
+      "anki-button"
+    );
+  });
+
+  it("duplicates and deletes Anki buttons without changing their neighbours", async () => {
+    vi.useFakeTimers();
+    const defaultButton = makeHoshidictsMiningProfile().buttons[0];
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: {
+          version: 4,
+          enabled: true,
+          buttons: [
+            defaultButton,
+            {
+              ...defaultButton,
+              id: "recognition",
+              label: "Recognition",
+              deck: "Recognition"
+            }
+          ]
+        }
+      })
+    });
+    await render();
+    await openMining();
+    await clickAndSettle(
+      container.querySelector<HTMLButtonElement>(
+        '[data-anki-button-id="recognition"]'
+      )
+    );
+
+    await flushAfter(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Duplicate Recognition"]'
+        )
+        ?.click();
+    });
+    await settle();
+    await flushAfter();
+
+    const duplicated = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1] as {
+      buttons: Array<{ id: string; label: string; deck: string }>;
+    };
+    expect(duplicated.buttons).toHaveLength(3);
+    expect(duplicated.buttons[1]).toMatchObject({
+      id: "recognition",
+      label: "Recognition",
+      deck: "Recognition"
+    });
+    expect(duplicated.buttons[2]).toMatchObject({
+      id: "anki-button",
+      label: "Recognition copy",
+      deck: "Recognition"
+    });
+
+    await flushAfter(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Delete Recognition copy"]'
+        )
+        ?.click();
+    });
+    await settle();
+    await flushAfter();
+
+    const deleted = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1] as {
+      buttons: Array<{ id: string }>;
+    };
+    expect(deleted.buttons.map(({ id }) => id)).toEqual([
+      "add-to-anki",
+      "recognition"
+    ]);
+    expect(
+      container.querySelector<HTMLInputElement>("#hoshidicts-mining-button-label")
+        ?.value
+    ).toBe("Recognition");
+  });
+
+  it("removes per-button controls after deleting the final Anki button", async () => {
+    vi.useFakeTimers();
+    ipc.configure({});
+    await render();
+    await openMining();
+    const optionsCalls = callsFor(HOSHIDICTS_CHANNELS.getMiningOptions).length;
+
+    await flushAfter(() => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Delete Add to Anki"]')
+        ?.click();
+    });
+    await settle();
+    await flushAfter();
+
+    const saved = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1] as {
+      buttons: unknown[];
+    };
+    expect(saved.buttons).toEqual([]);
+    expect(callsFor(HOSHIDICTS_CHANNELS.getMiningOptions)).toHaveLength(
+      optionsCalls
+    );
+    expect(
+      container.querySelector("#hoshidicts-mining-button-label")
+    ).toBeNull();
+    expect(container.querySelector("#hoshidicts-mining-deck")).toBeNull();
+    expect(container.querySelector("#hoshidicts-mining-model")).toBeNull();
+    expect(container.querySelector("#hoshidicts-mining-tags")).toBeNull();
+    expect(container.querySelector(".hoshidicts-mining-fields")).toBeNull();
+  });
+
+  it("loads Anki options for the selected stable button id", async () => {
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: makeHoshidictsMiningProfile({
+          id: "production",
+          label: "Production",
+          model: "Production"
+        })
+      })
+    });
+
+    await render();
+    await openMining();
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.getMiningOptions,
+      "Production",
+      "production"
+    );
+  });
+
   it("falls back to persisted target fields offline and preserves explicit blanks", async () => {
     const offlineState: HoshidictsDesktopSnapshot = {
       ...baseState,
-      miningProfile: {
-        ...baseState.miningProfile,
+      miningProfile: makeHoshidictsMiningProfile({
         model: "Offline",
         fieldTemplates: {
           Front: { value: "", overwriteMode: "coalesce" },
           Note: { value: "x", overwriteMode: "append" }
         }
-      }
+      })
     };
     ipc.configure({
       state: offlineState,
@@ -2411,11 +3260,10 @@ describe("HoshidictsSettingsWindow", () => {
   it("shows normalized legacy target fields while Anki is offline", async () => {
     const offlineState: HoshidictsDesktopSnapshot = {
       ...baseState,
-      miningProfile: {
-        ...baseState.miningProfile,
+      miningProfile: makeHoshidictsMiningProfile({
         model: "Offline legacy",
         fields: {
-          ...baseState.miningProfile.fields,
+          ...baseState.miningProfile.buttons[0].fields,
           expression: "Front",
           reading: "Reading",
           definition: "Front",
@@ -2423,12 +3271,12 @@ describe("HoshidictsSettingsWindow", () => {
         },
         disabledFields: ["reading"],
         fieldOverwriteModes: {
-          ...baseState.miningProfile.fieldOverwriteModes,
+          ...baseState.miningProfile.buttons[0].fieldOverwriteModes,
           expression: "append",
           definition: "overwrite"
         },
         fieldTemplates: null
-      }
+      })
     };
     ipc.configure({
       state: offlineState,
@@ -2467,13 +3315,12 @@ describe("HoshidictsSettingsWindow", () => {
     vi.useFakeTimers();
     const caseChangedState: HoshidictsDesktopSnapshot = {
       ...baseState,
-      miningProfile: {
-        ...baseState.miningProfile,
+      miningProfile: makeHoshidictsMiningProfile({
         model: "Case changed",
         fieldTemplates: {
           front: { value: "x", overwriteMode: "append" }
         }
-      }
+      })
     };
     ipc.configure({
       state: caseChangedState,
@@ -2508,9 +3355,7 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       fieldTemplates: {
         Front: { value: "x", overwriteMode: "append" },
         Back: { value: "y", overwriteMode: "coalesce" }
@@ -3238,22 +4083,19 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(invokeMock).toHaveBeenCalledWith(
-      HOSHIDICTS_CHANNELS.setMiningProfile,
-      expect.objectContaining({
-        checkForDuplicates: true,
-        duplicateScope: "deck-root",
-        duplicateScopeCheckAllModels: true,
-        duplicateBehavior: "overwrite",
-        fieldTemplates: expect.objectContaining({
-          Expression: {
-            value: "{expression}",
-            overwriteMode: "overwrite"
-          },
-          Front: { value: "", overwriteMode: "coalesce" }
-        })
+    expect(lastMiningButton()).toMatchObject({
+      checkForDuplicates: true,
+      duplicateScope: "deck-root",
+      duplicateScopeCheckAllModels: true,
+      duplicateBehavior: "overwrite",
+      fieldTemplates: expect.objectContaining({
+        Expression: {
+          value: "{expression}",
+          overwriteMode: "overwrite"
+        },
+        Front: { value: "", overwriteMode: "coalesce" }
       })
-    );
+    });
   });
 
   it.each([
@@ -3309,9 +4151,7 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       deck: "",
       duplicateScope: "collection"
     });
@@ -3343,27 +4183,24 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(invokeMock).toHaveBeenCalledWith(
-      HOSHIDICTS_CHANNELS.setMiningProfile,
-      expect.objectContaining({
-        fieldTemplates: {
-          Expression: { value: "{expression}", overwriteMode: "coalesce" },
-          ExpressionReading: {
-            value: "{reading}",
-            overwriteMode: "coalesce"
-          },
-          Glossary: { value: "{sentence}", overwriteMode: "coalesce" },
-          Sentence: { value: "{sentence}", overwriteMode: "coalesce" },
-          Frequency: { value: "{frequency}", overwriteMode: "coalesce" },
-          PitchPosition: {
-            value: "{pitch-position}",
-            overwriteMode: "coalesce"
-          },
-          WordAudio: { value: "", overwriteMode: "coalesce" },
-          Front: { value: "x", overwriteMode: "coalesce" }
-        }
-      })
-    );
+    expect(lastMiningButton()).toMatchObject({
+      fieldTemplates: {
+        Expression: { value: "{expression}", overwriteMode: "coalesce" },
+        ExpressionReading: {
+          value: "{reading}",
+          overwriteMode: "coalesce"
+        },
+        Glossary: { value: "{sentence}", overwriteMode: "coalesce" },
+        Sentence: { value: "{sentence}", overwriteMode: "coalesce" },
+        Frequency: { value: "{frequency}", overwriteMode: "coalesce" },
+        PitchPosition: {
+          value: "{pitch-position}",
+          overwriteMode: "coalesce"
+        },
+        WordAudio: { value: "", overwriteMode: "coalesce" },
+        Front: { value: "x", overwriteMode: "coalesce" }
+      }
+    });
     expect(container.querySelector("button")?.textContent).not.toBe(
       "Save Mining Profile"
     );
@@ -3460,7 +4297,7 @@ describe("HoshidictsSettingsWindow", () => {
     }, 1);
     await act(flushAutosave);
 
-    const saved = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1];
+    const saved = lastMiningButton();
     expect(saved).toMatchObject({
       model: "Lapis",
       fieldTemplates: null,
@@ -3502,11 +4339,10 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      "Kiku"
+      "Kiku",
+      "add-to-anki"
     );
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       model: "Kiku",
       fieldTemplates: {
         Front: { value: "x", overwriteMode: "coalesce" }
@@ -3523,11 +4359,10 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      ""
+      "",
+      "add-to-anki"
     );
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       model: "",
       fieldTemplates: {
         Front: { value: "x", overwriteMode: "coalesce" }
@@ -3587,11 +4422,10 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      ""
+      "",
+      "add-to-anki"
     );
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({ model: "", fieldTemplates: null });
+    expect(lastMiningButton()).toMatchObject({ model: "", fieldTemplates: null });
   });
 
 });

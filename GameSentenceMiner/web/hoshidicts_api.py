@@ -18,10 +18,6 @@ from GameSentenceMiner.hoshidicts_audio_profile import (
     HoshidictsAudioError,
     load_hoshidicts_audio_profile_or_default,
 )
-from GameSentenceMiner.hoshidicts_mining_note import (
-    HoshidictsMiningError,
-    MAX_REQUEST_BYTES,
-)
 from GameSentenceMiner.hoshidicts_mining import (
     MAX_BROWSE_REQUEST_BYTES,
     browse_hoshidicts_word,
@@ -29,6 +25,10 @@ from GameSentenceMiner.hoshidicts_mining import (
     get_hoshidicts_mining_options,
     get_hoshidicts_mining_status,
     mine_hoshidicts_note,
+)
+from GameSentenceMiner.hoshidicts_mining_note import (
+    MAX_REQUEST_BYTES,
+    HoshidictsMiningError,
 )
 from GameSentenceMiner.util.config.configuration import logger
 from GameSentenceMiner.util.database.term_lookup_stats_table import (
@@ -43,6 +43,15 @@ MAX_LOOKUP_STATS_LIMIT = 500
 
 def _lookup_stats_error(message: str, status_code: int):
     return jsonify({"success": False, "error": message}), status_code
+
+
+def _mining_error_payload(payload, message: str):
+    response = {"success": False, "error": message}
+    if isinstance(payload, dict):
+        button_id = payload.get("buttonId")
+        if isinstance(button_id, str) and 0 < len(button_id) <= 128:
+            response["buttonId"] = button_id
+    return response
 
 
 def _normalize_lookup_text(value, field: str, *, required: bool) -> str:
@@ -245,11 +254,16 @@ def register_hoshidicts_api_routes(app) -> None:
     @app.get("/api/hoshidicts/mining/options")
     @local_hoshidicts_only
     def api_hoshidicts_mining_options():
-        return jsonify(get_hoshidicts_mining_options(request.args.get("model")))
+        model = request.args.get("model")
+        button_id = request.args.get("buttonId")
+        if button_id is None:
+            return jsonify(get_hoshidicts_mining_options(model))
+        return jsonify(get_hoshidicts_mining_options(model, button_id))
 
     @app.post("/api/hoshidicts/mining/check")
     @local_hoshidicts_only
     def api_hoshidicts_mining_check():
+        payload = None
         try:
             payload = read_bounded_json(
                 MAX_REQUEST_BYTES,
@@ -258,7 +272,7 @@ def register_hoshidicts_api_routes(app) -> None:
             )
             return jsonify(check_hoshidicts_notes(payload))
         except HoshidictsMiningError as exc:
-            response = {"success": False, "error": str(exc)}
+            response = _mining_error_payload(payload, str(exc))
             if exc.status_code == 409:
                 response["code"] = "duplicate"
             return jsonify(response), exc.status_code
@@ -266,10 +280,10 @@ def register_hoshidicts_api_routes(app) -> None:
             logger.exception(f"Hoshidicts duplicate check failed: {exc}")
             return (
                 jsonify(
-                    {
-                        "success": False,
-                        "error": "Hoshidicts could not check the note through GSM.",
-                    }
+                    _mining_error_payload(
+                        payload,
+                        "Hoshidicts could not check the note through GSM.",
+                    )
                 ),
                 500,
             )
@@ -301,11 +315,12 @@ def register_hoshidicts_api_routes(app) -> None:
     @app.post("/api/hoshidicts/mine")
     @local_hoshidicts_only
     def api_hoshidicts_mine():
+        payload = None
         try:
             payload = read_bounded_json(MAX_REQUEST_BYTES, HoshidictsMiningError, "Mining")
             return jsonify(mine_hoshidicts_note(payload))
         except HoshidictsMiningError as exc:
-            response = {"success": False, "error": str(exc)}
+            response = _mining_error_payload(payload, str(exc))
             if exc.status_code == 409:
                 response["code"] = "duplicate"
             return jsonify(response), exc.status_code
@@ -313,10 +328,10 @@ def register_hoshidicts_api_routes(app) -> None:
             logger.exception(f"Hoshidicts mining failed: {exc}")
             return (
                 jsonify(
-                    {
-                        "success": False,
-                        "error": "Hoshidicts could not add the note through GSM.",
-                    }
+                    _mining_error_payload(
+                        payload,
+                        "Hoshidicts could not add the note through GSM.",
+                    )
                 ),
                 500,
             )

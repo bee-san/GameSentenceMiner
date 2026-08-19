@@ -44,8 +44,8 @@ from GameSentenceMiner.hoshidicts_markers import (
     templates_use_marker_keys,
 )
 from GameSentenceMiner.hoshidicts_mining_note import (
-    HoshidictsMiningError,
     MAX_TERM_LENGTH,
+    HoshidictsMiningError,
     bounded_string,
     definition_html,
     first_dictionary,
@@ -64,9 +64,19 @@ from GameSentenceMiner.util.config.configuration import get_app_directory, get_c
 
 HOSHIDICTS_MINING_PROFILE_FILE = "mining-profile.json"
 HOSHIDICTS_MINING_PROFILE_VERSION = 3
-MAX_PROFILE_BYTES = 64 * 1024
+HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION = 4
+HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID = "add-to-anki"
+MAX_PROFILE_BYTES = 1024 * 1024
 MAX_BROWSE_REQUEST_BYTES = 64 * 1024
 MINING_STATUS_CACHE_SECONDS = 2.0
+SAFE_ANKI_BUTTON_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+class _MiningConfigurationError(HoshidictsMiningError):
+    def __init__(self, message: str, reason: str, status_code: int = 503):
+        super().__init__(message, status_code)
+        self.reason = reason
+
 
 GENERIC_FIELD_ALIASES = {
     "expression": ("Expression", "Word", "Term", "Front"),
@@ -137,6 +147,26 @@ def default_hoshidicts_mining_profile() -> dict[str, Any]:
     }
 
 
+def default_hoshidicts_anki_button() -> dict[str, Any]:
+    profile = default_hoshidicts_mining_profile()
+    profile.pop("version")
+    return {
+        **profile,
+        "id": HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
+        "enabled": True,
+        "label": "Add to Anki",
+        "icon": "anki",
+    }
+
+
+def default_hoshidicts_mining_profile_document() -> dict[str, Any]:
+    return {
+        "version": HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION,
+        "enabled": True,
+        "buttons": [default_hoshidicts_anki_button()],
+    }
+
+
 def get_hoshidicts_mining_profile_path() -> Path:
     return Path(get_app_directory()) / "dictionaries" / "hoshidicts" / HOSHIDICTS_MINING_PROFILE_FILE
 
@@ -152,6 +182,33 @@ def normalize_hoshidicts_mining_profile(value: Any) -> dict[str, Any]:
     """
     if not isinstance(value, dict):
         raise HoshidictsMiningError("Hoshidicts mining profile must be an object.")
+    if value.get("version") == 4:
+        buttons = value.get("buttons")
+        if not isinstance(buttons, list):
+            raise HoshidictsMiningError("Hoshidicts Anki buttons must be an array.")
+        if not buttons:
+            value = {**default_hoshidicts_mining_profile(), "enabled": False}
+        else:
+            selected_button = next(
+                (
+                    button
+                    for button in buttons
+                    if isinstance(button, dict) and button.get("id") == HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID
+                ),
+                None,
+            )
+            if selected_button is None:
+                selected_button = next(
+                    (button for button in buttons if isinstance(button, dict) and button.get("enabled") is not False),
+                    next((button for button in buttons if isinstance(button, dict)), None),
+                )
+            if selected_button is None:
+                raise HoshidictsMiningError("Hoshidicts Anki button profile is invalid.")
+            value = {
+                **selected_button,
+                "version": HOSHIDICTS_MINING_PROFILE_VERSION,
+                "enabled": value.get("enabled") is not False and selected_button.get("enabled") is not False,
+            }
     if value.get("version", HOSHIDICTS_MINING_PROFILE_VERSION) != HOSHIDICTS_MINING_PROFILE_VERSION:
         raise HoshidictsMiningError("Hoshidicts mining profile version is unsupported.")
 
@@ -182,21 +239,150 @@ def normalize_hoshidicts_mining_profile(value: Any) -> dict[str, Any]:
     return profile
 
 
-def load_hoshidicts_mining_profile(
+def _normalize_hoshidicts_anki_button(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise HoshidictsMiningError("Hoshidicts Anki button must be an object.")
+    button_id = bounded_string(
+        value.get("id"),
+        "Hoshidicts Anki button id",
+        128,
+        allow_empty=False,
+    ).strip()
+    if SAFE_ANKI_BUTTON_ID_PATTERN.fullmatch(button_id) is None:
+        raise HoshidictsMiningError("Hoshidicts Anki button id is invalid.")
+    if not isinstance(value.get("enabled", True), bool):
+        raise HoshidictsMiningError("Hoshidicts Anki button enabled state is invalid.")
+    label = bounded_string(
+        value.get("label"),
+        "Hoshidicts Anki button label",
+        255,
+        allow_empty=False,
+    ).strip()
+    icon = bounded_string(
+        value.get("icon"),
+        "Hoshidicts Anki button icon",
+        255,
+        allow_empty=False,
+    ).strip()
+    if not label or not icon:
+        raise HoshidictsMiningError("Hoshidicts Anki button presentation is invalid.")
+    profile = normalize_hoshidicts_mining_profile({**value, "version": HOSHIDICTS_MINING_PROFILE_VERSION})
+    profile.pop("version")
+    return {
+        **profile,
+        "id": button_id,
+        "enabled": value.get("enabled", True),
+        "label": label,
+        "icon": icon,
+    }
+
+
+def normalize_hoshidicts_mining_profile_document(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise HoshidictsMiningError("Hoshidicts mining profile must be an object.")
+    raw_version = value.get("version")
+    inferred_version = (
+        (HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION if "buttons" in value else HOSHIDICTS_MINING_PROFILE_VERSION)
+        if raw_version is None
+        else raw_version
+    )
+    if inferred_version != HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION:
+        legacy = normalize_hoshidicts_mining_profile(value)
+        legacy.pop("version")
+        return {
+            "version": HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION,
+            "enabled": legacy["enabled"],
+            "buttons": [
+                {
+                    **legacy,
+                    "enabled": True,
+                    "id": HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
+                    "label": "Add to Anki",
+                    "icon": "anki",
+                }
+            ],
+        }
+    if not isinstance(value.get("enabled", True), bool):
+        raise HoshidictsMiningError("Hoshidicts mining enabled state is invalid.")
+    raw_buttons = value.get("buttons")
+    if not isinstance(raw_buttons, list):
+        raise HoshidictsMiningError("Hoshidicts Anki buttons must be an array.")
+    buttons = []
+    ids = set()
+    for raw_button in raw_buttons:
+        button = _normalize_hoshidicts_anki_button(raw_button)
+        if button["id"] in ids:
+            raise HoshidictsMiningError("Hoshidicts Anki button ids must be unique.")
+        ids.add(button["id"])
+        buttons.append(button)
+    return {
+        "version": HOSHIDICTS_MINING_PROFILE_DOCUMENT_VERSION,
+        "enabled": value.get("enabled", True),
+        "buttons": buttons,
+    }
+
+
+def load_hoshidicts_mining_profile_document(
     profile_path: Path | None = None,
 ) -> dict[str, Any]:
     path = profile_path or get_hoshidicts_mining_profile_path()
     try:
         stat = path.stat()
     except FileNotFoundError:
-        return default_hoshidicts_mining_profile()
+        return default_hoshidicts_mining_profile_document()
     if not path.is_file() or stat.st_size <= 0 or stat.st_size > MAX_PROFILE_BYTES:
         raise HoshidictsMiningError("Hoshidicts mining profile has an invalid size.")
     try:
         parsed = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         raise HoshidictsMiningError(f"Could not read the Hoshidicts mining profile: {exc}") from exc
-    return normalize_hoshidicts_mining_profile(parsed)
+    return normalize_hoshidicts_mining_profile_document(parsed)
+
+
+def _legacy_hoshidicts_anki_button(profile: dict[str, Any]) -> dict[str, Any]:
+    buttons = profile["buttons"]
+    selected = next(
+        (button for button in buttons if button["id"] == HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID),
+        next((button for button in buttons if button["enabled"]), buttons[0] if buttons else None),
+    )
+    if selected is None:
+        return {**default_hoshidicts_mining_profile(), "enabled": False}
+    selected_profile = {key: value for key, value in selected.items() if key not in {"id", "label", "icon"}}
+    return {
+        **selected_profile,
+        "version": HOSHIDICTS_MINING_PROFILE_VERSION,
+        "enabled": profile["enabled"] and selected["enabled"],
+    }
+
+
+def load_hoshidicts_mining_profile(
+    profile_path: Path | None = None,
+) -> dict[str, Any]:
+    return _legacy_hoshidicts_anki_button(load_hoshidicts_mining_profile_document(profile_path))
+
+
+def _selected_hoshidicts_anki_button(
+    profile: dict[str, Any],
+    button_id: Any,
+    *,
+    require_enabled: bool = True,
+) -> dict[str, Any]:
+    if require_enabled and not profile["enabled"]:
+        raise HoshidictsMiningError("Hoshidicts mining is disabled.", 503)
+    selected_id = bounded_string(
+        button_id,
+        "Hoshidicts Anki button id",
+        128,
+        allow_empty=False,
+    ).strip()
+    if SAFE_ANKI_BUTTON_ID_PATTERN.fullmatch(selected_id) is None:
+        raise HoshidictsMiningError("Hoshidicts Anki button id is invalid.")
+    selected = next((button for button in profile["buttons"] if button["id"] == selected_id), None)
+    if selected is None:
+        raise HoshidictsMiningError("This Anki button no longer exists. Reopen the popup and try again.", 404)
+    if require_enabled and not selected["enabled"]:
+        raise HoshidictsMiningError("This Anki button is disabled. Enable it in Hoshidicts Settings.", 503)
+    return selected
 
 
 def _field_name_key(value: str) -> str:
@@ -392,8 +578,9 @@ def _empty_mining_options(
     selected_note_type: str = "",
     gsm_anki_enabled: bool = False,
     error: str | None = None,
+    button_id: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    options = {
         "connected": False,
         "gsmAnkiEnabled": gsm_anki_enabled,
         "decks": [],
@@ -407,6 +594,9 @@ def _empty_mining_options(
         "warnings": [],
         "error": error,
     }
+    if button_id is not None:
+        options["buttonId"] = button_id
+    return options
 
 
 def _invalid_field_message(key: str, field: str, model: str) -> str:
@@ -423,12 +613,27 @@ def _without_saved_field_mappings(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_hoshidicts_mining_options(model: str | None = None) -> dict[str, Any]:
+def get_hoshidicts_mining_options(
+    model: str | None = None,
+    button_id: str | None = None,
+) -> dict[str, Any]:
     """Discover Anki mining choices without changing the saved mining profile."""
     selected_note_type = ""
+    selected_button_id = (
+        button_id
+        if isinstance(button_id, str) and SAFE_ANKI_BUTTON_ID_PATTERN.fullmatch(button_id) is not None
+        else None
+    )
     gsm_anki_enabled = False
     try:
-        profile = load_hoshidicts_mining_profile()
+        if button_id is None:
+            profile = load_hoshidicts_mining_profile()
+        else:
+            profile = _selected_hoshidicts_anki_button(
+                load_hoshidicts_mining_profile_document(),
+                button_id,
+                require_enabled=False,
+            )
         config = get_config()
         gsm_anki_enabled = bool(config.anki.enabled)
         config_model = str(config.anki.note_type or "").strip()
@@ -440,6 +645,7 @@ def get_hoshidicts_mining_options(model: str | None = None) -> dict[str, Any]:
         options = _empty_mining_options(
             selected_note_type=selected_note_type,
             gsm_anki_enabled=gsm_anki_enabled,
+            button_id=selected_button_id,
         )
         successful_calls = 0
         failures: list[Exception] = []
@@ -517,12 +723,14 @@ def get_hoshidicts_mining_options(model: str | None = None) -> dict[str, Any]:
             selected_note_type=selected_note_type,
             gsm_anki_enabled=gsm_anki_enabled,
             error=str(exc),
+            button_id=selected_button_id,
         )
     except Exception as exc:
         return _empty_mining_options(
             selected_note_type=selected_note_type,
             gsm_anki_enabled=gsm_anki_enabled,
             error=f"Could not connect to Anki through GSM: {exc}",
+            button_id=selected_button_id,
         )
 
 
@@ -530,39 +738,88 @@ def _resolve_mining_configuration(
     profile: dict[str, Any] | None = None,
     config: Any | None = None,
 ) -> dict[str, Any]:
-    profile = profile or load_hoshidicts_mining_profile()
-    config = config or get_config()
+    if profile is None:
+        profile = load_hoshidicts_mining_profile()
+    if config is None:
+        config = get_config()
     if not profile["enabled"]:
-        raise HoshidictsMiningError("Hoshidicts mining is disabled.", 503)
+        raise _MiningConfigurationError("Hoshidicts mining is disabled.", "miningDisabled")
     if not config.anki.enabled:
-        raise HoshidictsMiningError("GSM Anki integration is disabled.", 503)
+        raise _MiningConfigurationError("GSM Anki integration is disabled.", "ankiDisabled")
 
-    model = profile["model"] or str(config.anki.note_type or "").strip()
-    if not model:
-        raise HoshidictsMiningError(
+    requested_model = profile["model"] or str(config.anki.note_type or "").strip()
+    if not requested_model:
+        raise _MiningConfigurationError(
             "Set an Anki note type in GSM or override it in Hoshidicts.",
-            503,
+            "noteTypeMissing",
         )
 
-    raw_model_fields = invoke("modelFieldNames", modelName=model)
-    raw_decks = invoke("deckNames")
     try:
-        model_fields = name_list(raw_model_fields, "Anki field list")
+        raw_models = invoke("modelNames")
+        raw_decks = invoke("deckNames")
+    except Exception as exc:
+        raise _MiningConfigurationError(
+            f"Could not connect to Anki through GSM: {exc}",
+            "ankiUnavailable",
+            502,
+        ) from exc
+    try:
+        models = name_list(raw_models, "Anki note type list")
         decks = name_list(raw_decks, "Anki deck list")
     except HoshidictsMiningError as exc:
-        raise HoshidictsMiningError(str(exc), 503) from exc
+        raise _MiningConfigurationError(str(exc), "ankiUnavailable") from exc
+    model = find_field(models, requested_model)
+    if model is None:
+        raise _MiningConfigurationError(
+            f'Anki note type "{requested_model}" does not exist. Choose another note type in Hoshidicts Settings.',
+            "noteTypeNotFound",
+        )
     deck = find_field(decks, profile["deck"])
     if deck is None:
-        raise HoshidictsMiningError(f'Anki deck "{profile["deck"]}" does not exist.', 503)
+        raise _MiningConfigurationError(
+            f'Anki deck "{profile["deck"]}" does not exist. Choose another deck in Hoshidicts Settings.',
+            "deckMissing",
+        )
+
+    try:
+        raw_model_fields = invoke("modelFieldNames", modelName=model)
+    except Exception as exc:
+        raise _MiningConfigurationError(
+            f"Could not connect to Anki through GSM: {exc}",
+            "ankiUnavailable",
+            502,
+        ) from exc
+    try:
+        model_fields = name_list(
+            raw_model_fields,
+            "Anki field list",
+        )
+    except HoshidictsMiningError as exc:
+        raise _MiningConfigurationError(str(exc), "ankiUnavailable") from exc
+    if not model_fields:
+        raise _MiningConfigurationError(
+            "The selected Anki note type has no fields.",
+            "noteTypeNoFields",
+        )
 
     resolution = _resolve_mining_fields(model_fields, profile, config)
+    if resolution["staleFields"]:
+        field = resolution["staleFields"][0]
+        raise _MiningConfigurationError(
+            f'Anki field "{field}" does not exist in note type "{model}". '
+            "Update this button's field mappings in Hoshidicts Settings.",
+            "fieldMappingInvalid",
+        )
     if resolution["invalidFields"]:
         key, field = next(iter(resolution["invalidFields"].items()))
-        raise HoshidictsMiningError(_invalid_field_message(key, field, model), 503)
+        raise _MiningConfigurationError(
+            _invalid_field_message(key, field, model),
+            "fieldMappingInvalid",
+        )
     if model_fields and not resolution["resolvedFieldTemplates"][model_fields[0]]["value"].strip():
-        raise HoshidictsMiningError(
+        raise _MiningConfigurationError(
             f'The first Anki field "{model_fields[0]}" is empty. Map it to a value before mining.',
-            503,
+            "firstFieldEmpty",
         )
 
     return {
@@ -613,11 +870,14 @@ def _compute_mining_status(
             "fields": resolved["fields"],
             "unmappedFields": resolved["unmappedFields"],
         }
+    except _MiningConfigurationError as exc:
+        return {"available": False, "reason": exc.reason, "error": str(exc)}
     except HoshidictsMiningError as exc:
-        return {"available": False, "error": str(exc)}
+        return {"available": False, "reason": "buttonUnavailable", "error": str(exc)}
     except Exception as exc:
         return {
             "available": False,
+            "reason": "buttonUnavailable",
             "error": f"Could not connect to Anki through GSM: {exc}",
         }
 
@@ -625,7 +885,7 @@ def _compute_mining_status(
 def get_hoshidicts_mining_status() -> dict[str, Any]:
     global _status_cache_expires_at, _status_cache_key, _status_cache_value
     try:
-        profile = load_hoshidicts_mining_profile()
+        profile = load_hoshidicts_mining_profile_document()
         config = get_config()
         cache_key = _mining_status_cache_key(profile, config)
     except HoshidictsMiningError as exc:
@@ -641,9 +901,47 @@ def get_hoshidicts_mining_status() -> dict[str, Any]:
         if _status_cache_key == cache_key and _status_cache_value is not None and now < _status_cache_expires_at:
             return deepcopy(_status_cache_value)
 
-    # Concurrent callers may both compute this; the 2 s cache keeps that rare and
-    # the duplicate work is one AnkiConnect round trip.
-    status = _compute_mining_status(profile, config)
+    button_statuses = []
+    for button in profile["buttons"]:
+        metadata = {
+            "id": button["id"],
+            "label": button["label"],
+            "icon": button["icon"],
+            "enabled": button["enabled"],
+        }
+        if not profile["enabled"]:
+            button_status = {
+                "available": False,
+                "reason": "miningDisabled",
+                "error": "Hoshidicts mining is disabled.",
+            }
+        elif not button["enabled"]:
+            button_status = {
+                "available": False,
+                "reason": "buttonUnavailable",
+                "error": "This Anki button is disabled.",
+            }
+        else:
+            button_status = _compute_mining_status(button, config)
+        button_statuses.append({**metadata, **button_status})
+
+    selected_status = next(
+        (status for status in button_statuses if status["id"] == HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID),
+        next(
+            (status for status in button_statuses if status["enabled"]),
+            button_statuses[0] if button_statuses else None,
+        ),
+    )
+    if selected_status is None:
+        status = {
+            "available": False,
+            "reason": "buttonUnavailable",
+            "error": "No Hoshidicts Anki buttons are configured.",
+        }
+    else:
+        status = {key: value for key, value in selected_status.items() if key not in {"id", "label", "icon", "enabled"}}
+    status["enabled"] = profile["enabled"]
+    status["buttons"] = button_statuses
     with _status_cache_lock:
         _status_cache_key = cache_key
         _status_cache_value = deepcopy(status)
@@ -1168,7 +1466,10 @@ def _overwrite_target(note: dict[str, Any], first_model_field: str, resolved: di
     )
 
 
-def check_hoshidicts_notes(payload: Any) -> dict[str, Any]:
+def check_hoshidicts_notes_for_button(
+    button: dict[str, Any],
+    payload: Any,
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HoshidictsMiningError("Duplicate check request must be an object.")
     raw_notes = payload.get("notes")
@@ -1176,7 +1477,7 @@ def check_hoshidicts_notes(payload: Any) -> dict[str, Any]:
         raise HoshidictsMiningError("Duplicate check notes must contain at least 1 item.")
 
     requests = [validate_hoshidicts_mining_request(note) for note in raw_notes]
-    resolved = _resolve_mining_configuration()
+    resolved = _resolve_mining_configuration(button)
     if not resolved["modelFields"]:
         raise HoshidictsMiningError("The selected Anki note type has no fields.", 503)
     notes = [_build_hoshidicts_note(request, resolved) for request in requests]
@@ -1185,6 +1486,7 @@ def check_hoshidicts_notes(payload: Any) -> dict[str, Any]:
     if not profile["checkForDuplicates"]:
         return {
             "success": True,
+            "buttonId": str(button.get("id") or HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID),
             "checkForDuplicates": False,
             "duplicateBehavior": duplicate_behavior,
             "results": [{"state": "addable", "canAdd": True, "duplicate": False} for _note_value in notes],
@@ -1221,10 +1523,23 @@ def check_hoshidicts_notes(payload: Any) -> dict[str, Any]:
         results.append(result)
     return {
         "success": True,
+        "buttonId": str(button.get("id") or HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID),
         "checkForDuplicates": True,
         "duplicateBehavior": duplicate_behavior,
         "results": results,
     }
+
+
+def check_hoshidicts_notes(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict) and "buttonId" in payload:
+        button = _selected_hoshidicts_anki_button(
+            load_hoshidicts_mining_profile_document(),
+            payload["buttonId"],
+        )
+        return check_hoshidicts_notes_for_button(button, payload)
+    result = check_hoshidicts_notes_for_button(load_hoshidicts_mining_profile(), payload)
+    result.pop("buttonId", None)
+    return result
 
 
 def _enrich_hoshidicts_note_audio(
@@ -1314,9 +1629,12 @@ def _enrich_hoshidicts_note_audio(
     return {"status": "stored", "filename": stored_filename}
 
 
-def mine_hoshidicts_note(payload: Any) -> dict[str, Any]:
-    request = validate_hoshidicts_mining_request(payload)
-    resolved = _resolve_mining_configuration()
+def mine_hoshidicts_note_for_button(
+    button: dict[str, Any],
+    lookup_context: Any,
+) -> dict[str, Any]:
+    request = validate_hoshidicts_mining_request(lookup_context)
+    resolved = _resolve_mining_configuration(button)
     store_dictionary_media(request)
     note = _build_hoshidicts_note(request, resolved)
     profile = resolved["profile"]
@@ -1378,10 +1696,23 @@ def mine_hoshidicts_note(payload: Any) -> dict[str, Any]:
         )
     result = {
         "success": True,
+        "buttonId": str(button.get("id") or HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID),
         "noteId": note_id,
         "unmappedFields": resolved["unmappedFields"],
         "audio": audio_result,
     }
     if overwritten:
         result["overwritten"] = True
+    return result
+
+
+def mine_hoshidicts_note(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict) and "buttonId" in payload:
+        button = _selected_hoshidicts_anki_button(
+            load_hoshidicts_mining_profile_document(),
+            payload["buttonId"],
+        )
+        return mine_hoshidicts_note_for_button(button, payload)
+    result = mine_hoshidicts_note_for_button(load_hoshidicts_mining_profile(), payload)
+    result.pop("buttonId", None)
     return result

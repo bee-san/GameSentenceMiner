@@ -85,6 +85,46 @@
   const RECONNECT_INITIAL_DELAY_MS = 750;
   const RECONNECT_MAX_DELAY_MS = 12 * 1000;
   const MINING_STATUS_CACHE_MS = 5 * 1000;
+  const DEFAULT_ANKI_BUTTON_ID = "add-to-anki";
+  const SAFE_ANKI_BUTTON_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+  const MINING_UNAVAILABLE_MESSAGES = {
+    en: {
+      miningDisabled: "Enable Anki mining in Hoshidicts Settings.",
+      ankiDisabled: "Enable Anki integration in GSM Settings.",
+      noteTypeMissing: "Choose an Anki note type in Hoshidicts Settings.",
+      ankiUnavailable: "Open Anki and make sure AnkiConnect is available.",
+      noteTypeNotFound: "Choose an available Anki note type in Hoshidicts Settings.",
+      noteTypeNoFields: "Choose an Anki note type with fields in Hoshidicts Settings.",
+      deckMissing: "Choose an Anki deck in Hoshidicts Settings.",
+      fieldMappingInvalid: "Review this button's field mappings in Hoshidicts Settings.",
+      firstFieldEmpty: "Map the first Anki field in Hoshidicts Settings.",
+      buttonUnavailable: "Review this Anki button in Hoshidicts Settings.",
+    },
+    ja: {
+      miningDisabled: "Hoshidicts設定でAnkiマイニングを有効にしてください。",
+      ankiDisabled: "GSM設定でAnki連携を有効にしてください。",
+      noteTypeMissing: "Hoshidicts設定でAnkiノートタイプを選択してください。",
+      ankiUnavailable: "Ankiを開き、AnkiConnectが利用可能か確認してください。",
+      noteTypeNotFound: "Hoshidicts設定で利用可能なAnkiノートタイプを選択してください。",
+      noteTypeNoFields: "Hoshidicts設定でフィールドのあるAnkiノートタイプを選択してください。",
+      deckMissing: "Hoshidicts設定でAnkiデッキを選択してください。",
+      fieldMappingInvalid: "Hoshidicts設定でこのボタンのフィールド割り当てを確認してください。",
+      firstFieldEmpty: "Hoshidicts設定で最初のAnkiフィールドを割り当ててください。",
+      buttonUnavailable: "Hoshidicts設定でこのAnkiボタンを確認してください。",
+    },
+    ukr: {
+      miningDisabled: "Увімкніть видобування Anki в налаштуваннях Hoshidicts.",
+      ankiDisabled: "Увімкніть інтеграцію Anki в налаштуваннях GSM.",
+      noteTypeMissing: "Виберіть тип нотатки Anki в налаштуваннях Hoshidicts.",
+      ankiUnavailable: "Відкрийте Anki й перевірте доступність AnkiConnect.",
+      noteTypeNotFound: "Виберіть доступний тип нотатки Anki в налаштуваннях Hoshidicts.",
+      noteTypeNoFields: "Виберіть тип нотатки Anki з полями в налаштуваннях Hoshidicts.",
+      deckMissing: "Виберіть колоду Anki в налаштуваннях Hoshidicts.",
+      fieldMappingInvalid: "Перевірте відповідність полів цієї кнопки в налаштуваннях Hoshidicts.",
+      firstFieldEmpty: "Призначте перше поле Anki в налаштуваннях Hoshidicts.",
+      buttonUnavailable: "Перевірте цю кнопку Anki в налаштуваннях Hoshidicts.",
+    },
+  };
   const MAX_VISIBLE_METADATA_TAGS = 12;
   const SOURCE_HIGHLIGHT_NAME = "gsm-hoshidicts-match";
   const JAPANESE_ONLY_TOKEN_PATTERN =
@@ -2271,7 +2311,7 @@
     let mediaQueue = [];
     let popupVisible = false;
     let noteEditing = false;
-    let miningInFlight = false;
+    const miningInFlightButtonIds = new Set();
     let miningStatusCache = null;
     let miningStatusCacheExpiresAt = 0;
     let miningStatusPromise = null;
@@ -3073,6 +3113,11 @@
         lookupStatsRequestGeneration: 0,
         miningCheckError: null,
         miningRefreshPromise: null,
+        miningRefreshFeedback: null,
+        miningRefreshItems: null,
+        miningRefreshIndex: 0,
+        pendingMiningRefreshItems: new Map(),
+        pendingMiningRefreshFeedback: null,
         miningStatusGeneration: 0,
         miningItems: [],
         miningFeedback: null,
@@ -3153,18 +3198,18 @@
           appendedMiningItems,
           audioItems,
           feedback,
-          miningItems,
         }) {
           const refreshActive = level.miningRefreshPromise !== null;
+          const liveMiningItems = level.view.getMiningItems();
           const appendedButtons = new Set(appendedMiningButtons);
-          const existingButtonVisible = miningItems.some(
+          const existingButtonVisible = liveMiningItems.some(
             ({ button }) => !appendedButtons.has(button) && !button.hidden
           );
           for (const button of appendedMiningButtons) {
             button.hidden = !(refreshActive && existingButtonVisible);
           }
           level.audioItems = audioItems;
-          level.miningItems = miningItems;
+          level.miningItems = liveMiningItems;
           level.miningFeedback = feedback;
           syncAudioRenderedResults(depth, false);
           if (level.miningCheckError) {
@@ -3174,7 +3219,7 @@
             }
             return;
           }
-          if (!refreshActive) {
+          if (appendedMiningItems.length > 0) {
             void startMiningRefresh(level, appendedMiningItems, feedback);
           }
         },
@@ -3817,6 +3862,92 @@
       return miningStatusCache;
     }
 
+    function miningButtonId(value) {
+      return typeof value === "string" && SAFE_ANKI_BUTTON_ID_PATTERN.test(value)
+        ? value
+        : "";
+    }
+
+    function miningActionId(button) {
+      return miningButtonId(button.dataset.buttonId) || DEFAULT_ANKI_BUTTON_ID;
+    }
+
+    function isMiningButtonInFlight(button) {
+      return miningInFlightButtonIds.has(miningActionId(button));
+    }
+
+    function configuredMiningButtonStatuses(status) {
+      if (!isRecord(status) || !Array.isArray(status.buttons)) {
+        return null;
+      }
+      if (
+        status.buttons.length > 0 &&
+        !status.buttons.some(
+          (entry) => isRecord(entry) && typeof entry.label === "string"
+        )
+      ) {
+        return null;
+      }
+      return status.buttons.filter((entry) =>
+        isRecord(entry) &&
+        entry.enabled === true &&
+        miningButtonId(entry.id) &&
+        typeof entry.label === "string" &&
+        entry.label.trim().length > 0
+      );
+    }
+
+    function miningUnavailableMessage(buttonStatus) {
+      const reason = typeof buttonStatus?.reason === "string"
+        ? buttonStatus.reason
+        : "";
+      const translated = MINING_UNAVAILABLE_MESSAGES[locale] ??
+        MINING_UNAVAILABLE_MESSAGES.en;
+      if (reason && translated[reason]) {
+        return translated[reason];
+      }
+      return typeof buttonStatus?.error === "string" && buttonStatus.error
+        ? buttonStatus.error
+        : translated.buttonUnavailable;
+    }
+
+    function statusForMiningButton(status, button) {
+      if (!isRecord(status) || !Array.isArray(status.buttons)) {
+        return status;
+      }
+      const buttonStatuses = status.buttons.filter(
+        (entry) => isRecord(entry) && miningButtonId(entry.id)
+      );
+      const requestedId = miningButtonId(button.dataset.buttonId);
+      const selected = requestedId
+        ? buttonStatuses.find((entry) => miningButtonId(entry.id) === requestedId)
+        : buttonStatuses.find(
+            (entry) => miningButtonId(entry.id) === DEFAULT_ANKI_BUTTON_ID
+          ) ??
+          buttonStatuses.find((entry) => entry.enabled === true) ??
+          buttonStatuses[0];
+      if (!selected) {
+        return {
+          available: false,
+          error: requestedId
+            ? "This Anki button is unavailable."
+            : "No valid Anki buttons are available."
+        };
+      }
+      const selectedId = miningButtonId(selected.id);
+      if (
+        buttonStatuses.filter(
+          (entry) => miningButtonId(entry.id) === selectedId
+        ).length !== 1
+      ) {
+        return { available: false, reason: "buttonUnavailable" };
+      }
+      if (selectedId) {
+        button.dataset.buttonId = selectedId;
+      }
+      return selected;
+    }
+
     function miningResultWithFrequencyModes(result) {
       const frequencyModes = new Map(
         preferences.dictionaryPresentation
@@ -4016,11 +4147,11 @@
         : { payload: { ...payload, [key]: included }, bytesAdded };
     }
 
-    function createCompleteMiningPayload(result, candidate, level) {
+    function createCompleteMiningPayload(result, candidate, level, extra = {}) {
       const audioSelection = audioController.getSelection(result);
       const basePayload = createMiningBasePayload(
         { result, candidate },
-        audioSelection ? { audioSelection } : {}
+        { ...(audioSelection ? { audioSelection } : {}), ...extra }
       );
       const generation = level.termView?.dictionaryGeneration ?? null;
       const finish = (dictionaryMedia) => {
@@ -4051,8 +4182,12 @@
 
     function createDuplicateCheckPayload(level, miningItems) {
       const notes = miningItems.map((item) => createMiningBasePayload(item));
+      const buttonId = miningItems.length === 1
+        ? miningButtonId(miningItems[0].button.dataset.buttonId)
+        : "";
+      const requestPayload = buttonId ? { buttonId, notes } : { notes };
       let remainingBytes = MAX_DUPLICATE_CHECK_REQUEST_BYTES - utf8Length(
-        JSON.stringify({ notes })
+        JSON.stringify(requestPayload)
       );
       const generation = level.termView?.dictionaryGeneration ?? null;
       for (let index = 0; index < notes.length && remainingBytes > 0; index += 1) {
@@ -4077,7 +4212,7 @@
         notes[index] = payload;
         remainingBytes -= bytesAdded;
       }
-      return { notes };
+      return requestPayload;
     }
 
     function isLiveMiningRender(level, generation, feedback) {
@@ -4138,39 +4273,75 @@
 
     async function refreshMiningButtons(level, miningItems, feedback) {
       const generation = ++level.miningStatusGeneration;
-      if (!preferences.popupButtons.addToAnki) {
+      const status = await getCachedMiningStatus();
+      if (!isLiveMiningRender(level, generation, feedback)) {
+        return;
+      }
+      const configuredButtons = configuredMiningButtonStatuses(status);
+      const synchronizedMiningItems = level.view.setMiningButtonProfiles(
+        configuredButtons
+      );
+      if (synchronizedMiningItems !== null) {
+        miningItems.splice(
+          0,
+          miningItems.length,
+          ...synchronizedMiningItems
+        );
+        level.miningItems = miningItems;
+      }
+      if (configuredButtons === null && !preferences.popupButtons.addToAnki) {
         for (const { button } of miningItems) {
           button.hidden = true;
         }
         return;
       }
-      const status = await getCachedMiningStatus();
-      if (!isLiveMiningRender(level, generation, feedback)) {
-        return;
+      let hasAvailableItem = false;
+      for (const miningItem of miningItems) {
+        const buttonStatus = statusForMiningButton(status, miningItem.button);
+        if (buttonStatus && buttonStatus.available === true && onMine) {
+          hasAvailableItem = true;
+          miningItem.button.hidden = false;
+          if (!isMiningButtonInFlight(miningItem.button)) {
+            setMiningButtonState(miningItem.button, "checking");
+          }
+          continue;
+        }
+        const reason = miningUnavailableMessage(buttonStatus);
+        miningItem.button.hidden = configuredButtons === null;
+        setMiningButtonState(miningItem.button, "unavailable", reason);
       }
-      if (status && status.available === true && onMine) {
-        for (const { button } of miningItems) {
-          button.hidden = false;
-          setMiningButtonState(
-            button,
-            "checking",
-            miningInFlight ? "Another note is being added" : ""
-          );
-        }
-        if (miningInFlight) {
-          return;
-        }
+      if (hasAvailableItem) {
         if (!checkMiningNotes) {
-          for (const { button } of miningItems) {
-            setMiningButtonState(button, "ready");
+          for (const miningItem of miningItems) {
+            const buttonStatus = statusForMiningButton(status, miningItem.button);
+            if (
+              buttonStatus &&
+              buttonStatus.available === true &&
+              !isMiningButtonInFlight(miningItem.button)
+            ) {
+              setMiningButtonState(miningItem.button, "ready");
+            }
           }
           return;
         }
         for (let index = 0; index < miningItems.length; index += 1) {
+          level.miningRefreshIndex = index;
           if (!isLiveMiningRender(level, generation, feedback)) {
             return;
           }
           const miningItem = miningItems[index];
+          if (isMiningButtonInFlight(miningItem.button)) {
+            continue;
+          }
+          const buttonStatus = statusForMiningButton(status, miningItem.button);
+          if (!buttonStatus || buttonStatus.available !== true) {
+            const reason = miningUnavailableMessage(buttonStatus);
+            miningItem.button.hidden = configuredButtons === null;
+            setMiningButtonState(miningItem.button, "unavailable", reason);
+            continue;
+          }
+          miningItem.button.hidden = false;
+          setMiningButtonState(miningItem.button, "checking");
           try {
             const duplicateInfo = await checkMiningNotes(
               createDuplicateCheckPayload(level, [miningItem])
@@ -4222,13 +4393,6 @@
         }
         return;
       }
-      const reason = status && typeof status.error === "string"
-        ? status.error
-        : "Set up Anki mining in Hoshidicts Settings.";
-      for (const { button } of miningItems) {
-        button.hidden = true;
-        setMiningButtonState(button, "unavailable", reason);
-      }
       // Match Yomitan's quiet unavailable state: dictionary results remain the
       // focus, with no setup warning or inert mining affordance. Errors from a
       // real mining attempt still flow through mineResult below.
@@ -4236,20 +4400,64 @@
     }
 
     function startMiningRefresh(level, miningItems, feedback) {
-      const refresh = refreshMiningButtons(level, miningItems, feedback);
-      level.miningRefreshPromise = refresh;
-      void refresh.then(
-        () => {
-          if (level.miningRefreshPromise === refresh) {
-            level.miningRefreshPromise = null;
-          }
-        },
-        () => {
-          if (level.miningRefreshPromise === refresh) {
-            level.miningRefreshPromise = null;
+      if (
+        level.miningRefreshPromise &&
+        level.miningRefreshFeedback !== feedback
+      ) {
+        level.miningRefreshPromise = null;
+        level.miningRefreshFeedback = null;
+        level.miningRefreshItems = null;
+        level.miningRefreshIndex = 0;
+        level.pendingMiningRefreshItems.clear();
+        level.pendingMiningRefreshFeedback = null;
+      }
+      if (level.miningRefreshPromise) {
+        const activeItems = (level.miningRefreshItems || []).slice(
+          level.miningRefreshIndex
+        );
+        for (const miningItem of miningItems) {
+          const coveredByActiveRefresh = activeItems.some(
+            (activeItem) => activeItem.button === miningItem.button
+          ) && !isMiningButtonInFlight(miningItem.button);
+          if (!coveredByActiveRefresh) {
+            level.pendingMiningRefreshItems.set(
+              miningItem.button,
+              miningItem
+            );
           }
         }
-      );
+        if (level.pendingMiningRefreshItems.size > 0) {
+          level.pendingMiningRefreshFeedback = feedback;
+        }
+        return level.miningRefreshPromise;
+      }
+      level.miningRefreshFeedback = feedback;
+      level.miningRefreshItems = miningItems;
+      level.miningRefreshIndex = 0;
+      const refresh = refreshMiningButtons(level, miningItems, feedback);
+      level.miningRefreshPromise = refresh;
+      const finish = () => {
+        if (level.miningRefreshPromise !== refresh) {
+          return;
+        }
+        level.miningRefreshPromise = null;
+        level.miningRefreshFeedback = null;
+        level.miningRefreshItems = null;
+        level.miningRefreshIndex = 0;
+        const pendingItems = Array.from(
+          level.pendingMiningRefreshItems.values()
+        ).filter(({ button }) => button.isConnected);
+        const pendingFeedback = level.pendingMiningRefreshFeedback;
+        level.pendingMiningRefreshItems.clear();
+        level.pendingMiningRefreshFeedback = null;
+        if (
+          pendingItems.length > 0 &&
+          pendingFeedback?.isConnected
+        ) {
+          void startMiningRefresh(level, pendingItems, pendingFeedback);
+        }
+      };
+      void refresh.then(finish, finish);
       return refresh;
     }
 
@@ -4321,9 +4529,11 @@
     }
 
     async function mineResult(button, result, candidate, feedback) {
+      const buttonId = miningButtonId(button.dataset.buttonId);
+      const actionId = buttonId || DEFAULT_ANKI_BUTTON_ID;
       if (
         !onMine ||
-        miningInFlight ||
+        miningInFlightButtonIds.has(actionId) ||
         !["ready", "add-duplicate", "overwrite", "error"].includes(
           button.dataset.state
         )
@@ -4334,7 +4544,7 @@
       if (!level) {
         return;
       }
-      miningInFlight = true;
+      miningInFlightButtonIds.add(actionId);
       level.view.setFeedback(
         feedback,
         button.dataset.state === "overwrite"
@@ -4343,10 +4553,13 @@
       );
       const buttons = popupLevels.flatMap((entry) =>
         Array.from(entry.popup.querySelectorAll(".gsm-hoshidicts-mine-button"))
-      );
+      ).filter((current) => miningActionId(current) === actionId);
       const previousButtonStates = new Map(buttons.map((current) => [
         current,
-        { message: current.title, state: current.dataset.state },
+        {
+          message: current.dataset.stateMessage || "",
+          state: current.dataset.state
+        },
       ]));
       for (const current of buttons) {
         setMiningButtonState(current, current === button ? "mining" : "checking");
@@ -4354,11 +4567,9 @@
       let added = false;
       let duplicateRejected = false;
       try {
-        let miningPayload = createCompleteMiningPayload(
-          result,
-          candidate,
-          level
-        );
+        let miningPayload = createCompleteMiningPayload(result, candidate, level, {
+          ...(buttonId ? { buttonId } : {})
+        });
         if (miningPayload instanceof Promise) {
           miningPayload = await miningPayload;
         }
@@ -4422,7 +4633,7 @@
           );
         }
       } finally {
-        miningInFlight = false;
+        miningInFlightButtonIds.delete(actionId);
         for (const currentLevel of popupLevels) {
           if (
             !currentLevel.visible ||
@@ -4431,21 +4642,27 @@
           ) {
             continue;
           }
-          const hasReplacementButtons = currentLevel.miningItems.some(
+          const relatedItems = currentLevel.miningItems.filter(
+            ({ button: current }) => miningActionId(current) === actionId
+          );
+          if (relatedItems.length === 0) {
+            continue;
+          }
+          const hasReplacementButtons = relatedItems.some(
             ({ button: current }) => !previousButtonStates.has(current)
           );
           if (
-            checkMiningNotes &&
-            (added || duplicateRejected || hasReplacementButtons)
+            hasReplacementButtons ||
+            (checkMiningNotes && (added || duplicateRejected))
           ) {
             void startMiningRefresh(
               currentLevel,
-              currentLevel.miningItems,
+              relatedItems,
               currentLevel.miningFeedback
             );
             continue;
           }
-          for (const { button: current } of currentLevel.miningItems) {
+          for (const { button: current } of relatedItems) {
             if (current === button || !current.isConnected) {
               continue;
             }

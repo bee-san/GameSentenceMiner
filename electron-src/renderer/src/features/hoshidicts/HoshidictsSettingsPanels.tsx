@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
+  Copy,
   Download,
   EllipsisVertical,
   Eraser,
@@ -10,6 +11,7 @@ import {
   FolderPlus,
   Keyboard,
   Pencil,
+  Plus,
   RefreshCw,
   Save,
   Star,
@@ -2047,6 +2049,154 @@ export function MiningPanel({ controller }: { controller: Controller }) {
         </div>
       </div>
 
+      <div className="hoshidicts-anki-button-editor">
+        <div className="hoshidicts-anki-button-editor__heading">
+          <div>
+            <h3>{t("settings.hoshidicts.mining.buttons.title")}</h3>
+            <p>{t("settings.hoshidicts.mining.buttons.help")}</p>
+          </div>
+          <button
+            id="hoshidicts-mining-add-button"
+            type="button"
+            className="secondary"
+            disabled={miningBusy || miningOptionsLoading}
+            onClick={controller.addMiningButton}
+          >
+            <Plus size={16} aria-hidden="true" />
+            {t("settings.hoshidicts.mining.buttons.add")}
+          </button>
+        </div>
+        {miningDraft.buttons.length === 0 ? (
+          <p className="hoshidicts-mining-help">
+            {t("settings.hoshidicts.mining.buttons.empty")}
+          </p>
+        ) : (
+          <div className="hoshidicts-anki-button-list">
+            {miningDraft.buttons.map((button, index) => {
+              const selected = button.id === miningDraft.selectedButtonId;
+              const draftLabel = selected ? miningDraft.label : button.label;
+              const label =
+                draftLabel.trim().length > 0
+                  ? draftLabel
+                  : button.label.trim().length > 0
+                    ? button.label
+                    : t("settings.hoshidicts.mining.buttons.newName");
+              return (
+                <div
+                  key={button.id}
+                  className="hoshidicts-anki-button-list__row"
+                  data-enabled={button.enabled}
+                >
+                  <button
+                    type="button"
+                    className="hoshidicts-anki-button-list__select"
+                    data-anki-button-id={button.id}
+                    aria-pressed={selected}
+                    disabled={miningBusy || miningOptionsLoading}
+                    onClick={() => controller.selectMiningButton(button.id)}
+                  >
+                    {label}
+                  </button>
+                  <div className="hoshidicts-anki-button-list__actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      aria-label={t(
+                        button.enabled
+                          ? "settings.hoshidicts.mining.buttons.disable"
+                          : "settings.hoshidicts.mining.buttons.enable",
+                        { name: label }
+                      )}
+                      disabled={miningBusy}
+                      onClick={() =>
+                        controller.setMiningButtonEnabled(
+                          button.id,
+                          !button.enabled
+                        )
+                      }
+                    >
+                      {t(
+                        button.enabled
+                          ? "settings.hoshidicts.mining.buttons.enabledState"
+                          : "settings.hoshidicts.mining.buttons.disabledState"
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="hoshidicts-icon-button"
+                      aria-label={t(
+                        "settings.hoshidicts.mining.buttons.duplicate",
+                        { name: label }
+                      )}
+                      disabled={miningBusy || !selected}
+                      onClick={controller.duplicateMiningButton}
+                    >
+                      <Copy size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="hoshidicts-icon-button"
+                      aria-label={t(
+                        "settings.hoshidicts.mining.buttons.moveUp",
+                        { name: label }
+                      )}
+                      disabled={miningBusy || index === 0}
+                      onClick={() => controller.moveMiningButton(button.id, -1)}
+                    >
+                      <ArrowUp size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="hoshidicts-icon-button"
+                      aria-label={t(
+                        "settings.hoshidicts.mining.buttons.moveDown",
+                        { name: label }
+                      )}
+                      disabled={
+                        miningBusy || index === miningDraft.buttons.length - 1
+                      }
+                      onClick={() => controller.moveMiningButton(button.id, 1)}
+                    >
+                      <ArrowDown size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="hoshidicts-icon-button hoshidicts-icon-button--danger"
+                      aria-label={t(
+                        "settings.hoshidicts.mining.buttons.delete",
+                        { name: label }
+                      )}
+                      disabled={miningBusy}
+                      onClick={() => controller.deleteMiningButton(button.id)}
+                    >
+                      <Trash2 size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {miningDraft.selectedButtonId ? (
+          <label
+            className="hoshidicts-setting hoshidicts-anki-button-editor__name"
+            htmlFor="hoshidicts-mining-button-label"
+          >
+            <span>{t("settings.hoshidicts.mining.buttons.name")}</span>
+            <input
+              id="hoshidicts-mining-button-label"
+              type="text"
+              maxLength={255}
+              value={miningDraft.label}
+              disabled={miningBusy}
+              onChange={(event) => setMiningValue("label", event.target.value)}
+            />
+          </label>
+        ) : null}
+      </div>
+
+      {miningDraft.selectedButtonId ? (
+        <>
       <div className="hoshidicts-anki-status">
         <div
           className="hoshidicts-anki-status__badge"
@@ -2348,6 +2498,8 @@ export function MiningPanel({ controller }: { controller: Controller }) {
           </p>
         ))}
       </details>
+        </>
+      ) : null}
     </section>
   );
 }

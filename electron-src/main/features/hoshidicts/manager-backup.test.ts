@@ -34,6 +34,14 @@ interface TestArchive {
 
 const tempDirectories: string[] = [];
 
+function makeMiningProfile(overrides: Record<string, unknown> = {}) {
+    const profile = defaultHoshidictsMiningProfile();
+    return {
+        ...profile,
+        buttons: [{ ...profile.buttons[0], ...overrides }],
+    };
+}
+
 function makeTempDirectory(prefix: string): string {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     tempDirectories.push(directory);
@@ -285,8 +293,7 @@ describe('Hoshidicts manager full backups', () => {
         await source.setReaderPreferences(readerPreferences);
         await source.setSchedule('weekly');
         await source.setDictionarySchedule(beta!.id, 'hourly');
-        const miningProfile = {
-            ...defaultHoshidictsMiningProfile(),
+        const miningProfile = makeMiningProfile({
             deck: 'Japanese::Mining',
             model: 'Japanese',
             tags: ['hoshidicts', 'backup'],
@@ -311,7 +318,7 @@ describe('Hoshidicts manager full backups', () => {
                     overwriteMode: 'coalesce-new' as const,
                 },
             },
-        };
+        });
         await source.setMiningProfile(miningProfile);
         const audioProfile = {
             ...defaultHoshidictsAudioProfile(),
@@ -525,10 +532,7 @@ describe('Hoshidicts manager full backups', () => {
                 revision: 'new',
             }),
         );
-        await source.setMiningProfile({
-            ...defaultHoshidictsMiningProfile(),
-            deck: 'Source Deck',
-        });
+        await source.setMiningProfile(makeMiningProfile({ deck: 'Source Deck' }));
         const backupPath = path.join(workspace, 'backup.zip');
         await source.exportBackup(backupPath);
 
@@ -540,10 +544,7 @@ describe('Hoshidicts manager full backups', () => {
                 revision: 'live',
             }),
         );
-        await target.setMiningProfile({
-            ...defaultHoshidictsMiningProfile(),
-            deck: 'Live Deck',
-        });
+        await target.setMiningProfile(makeMiningProfile({ deck: 'Live Deck' }));
         const targetAudioProfile = {
             ...defaultHoshidictsAudioProfile(),
             autoPlay: true,
@@ -578,7 +579,7 @@ describe('Hoshidicts manager full backups', () => {
         const restoredSnapshot = await target.getSnapshot();
         expect(restoredSnapshot.dictionaries).toHaveLength(1);
         expect(restoredSnapshot.dictionaries[0].title).toBe('Target Dictionary');
-        expect(restoredSnapshot.miningProfile.deck).toBe('Live Deck');
+        expect(restoredSnapshot.miningProfile.buttons[0].deck).toBe('Live Deck');
         expect(restoredSnapshot.audioProfile).toEqual(targetAudioProfile);
         await expect(target.getCustomDictionaryDocument()).resolves.toMatchObject({
             text: '犬, いぬ, dog\n',

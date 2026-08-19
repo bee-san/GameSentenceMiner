@@ -1787,6 +1787,25 @@ html[data-hoshidicts-theme="miku"] .gsm-hoshidicts-popup {
   font: 700 20px/1 "Segoe UI", sans-serif;
 }
 
+.gsm-hoshidicts-mine-button--labeled {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 160px;
+  gap: 5px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.gsm-hoshidicts-mine-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .gsm-hoshidicts-mine-icon {
   display: inline-flex;
   flex: 0 0 16px;

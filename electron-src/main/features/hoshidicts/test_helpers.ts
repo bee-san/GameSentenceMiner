@@ -7,7 +7,9 @@ import {
     createDefaultHoshidictsAudioProfile,
     createDefaultHoshidictsFieldOverwriteModes,
     createDefaultHoshidictsReaderPreferences,
+    HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
     HOSHIDICTS_RECOMMENDED_DICTIONARY_IDS,
+    type HoshidictsAnkiButton,
     type HoshidictsDictionaryState,
     type HoshidictsManagerSnapshot,
     type HoshidictsMiningFields,
@@ -74,23 +76,31 @@ function emptyMiningFields(): HoshidictsMiningFields {
 }
 
 export function makeHoshidictsMiningProfile(
-    overrides: Partial<HoshidictsMiningProfile> = {}
+    overrides: Partial<HoshidictsAnkiButton> = {}
 ): HoshidictsMiningProfile {
     return {
-        version: 3,
+        version: 4,
         enabled: true,
-        deck: 'Default',
-        model: '',
-        fields: emptyMiningFields(),
-        disabledFields: [],
-        tags: ['hoshidicts'],
-        checkForDuplicates: true,
-        duplicateScope: 'collection',
-        duplicateScopeCheckAllModels: false,
-        duplicateBehavior: 'prevent',
-        fieldOverwriteModes: createDefaultHoshidictsFieldOverwriteModes(),
-        fieldTemplates: null,
-        ...overrides,
+        buttons: [
+            {
+                id: HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
+                enabled: true,
+                label: 'Add to Anki',
+                icon: 'anki',
+                deck: 'Default',
+                model: '',
+                fields: emptyMiningFields(),
+                disabledFields: [],
+                tags: ['hoshidicts'],
+                checkForDuplicates: true,
+                duplicateScope: 'collection',
+                duplicateScopeCheckAllModels: false,
+                duplicateBehavior: 'prevent',
+                fieldOverwriteModes: createDefaultHoshidictsFieldOverwriteModes(),
+                fieldTemplates: null,
+                ...overrides,
+            },
+        ],
     };
 }
 

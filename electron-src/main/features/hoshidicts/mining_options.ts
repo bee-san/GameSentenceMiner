@@ -64,13 +64,17 @@ export function normalizeHoshidictsMiningOptions(
 }
 
 export async function fetchHoshidictsMiningOptions(
-    model?: string
+    model?: string,
+    buttonId?: string
 ): Promise<HoshidictsMiningOptions> {
     const url = new URL(
         `http://127.0.0.1:${getConfiguredSinglePort()}/api/hoshidicts/mining/options`
     );
     if (model !== undefined) {
         url.searchParams.set('model', model);
+    }
+    if (buttonId !== undefined) {
+        url.searchParams.set('buttonId', buttonId);
     }
     try {
         const response = await fetch(url.toString(), {

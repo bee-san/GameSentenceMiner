@@ -967,6 +967,23 @@
       "mining": {
         "title": "Anki mining profile",
         "enabled": "Enable mining",
+        "buttons": {
+          "title": "Anki buttons",
+          "help": "Create one button for each mining destination. This order is used in the popup.",
+          "empty": "No Anki buttons are configured yet.",
+          "name": "Button name",
+          "newName": "New Anki button",
+          "add": "Add button",
+          "duplicate": "Duplicate {name}",
+          "duplicateName": "{name} copy",
+          "enable": "Enable {name}",
+          "disable": "Disable {name}",
+          "enabledState": "Enabled",
+          "disabledState": "Disabled",
+          "moveUp": "Move {name} up",
+          "moveDown": "Move {name} down",
+          "delete": "Delete {name}"
+        },
         "checkingAnki": "Checking AnkiConnect...",
         "ankiConnected": "AnkiConnect connected",
         "ankiDisconnected": "AnkiConnect disconnected",

@@ -10,11 +10,16 @@ interface HoshidictsAutosaveOptions<TDraft, TRequest> {
   initialDraft: () => TDraft;
   cloneDraft: (draft: TDraft) => TDraft;
   toRequest: (draft: TDraft) => TRequest;
-  savedDraft: (result: HoshidictsActionResult, request: TRequest) => TDraft;
+  savedDraft: (
+    result: HoshidictsActionResult,
+    request: TRequest,
+    currentDraft: TDraft
+  ) => TDraft;
   channel: string;
   errorFallback: string;
   applyResult: (result: HoshidictsActionResult, showOutcome?: boolean) => boolean;
   setActionError: (message: string | null) => void;
+  onSaved?: (request: TRequest, currentDraft: TDraft) => void;
   paused?: boolean;
 }
 
@@ -27,6 +32,7 @@ export function useHoshidictsAutosave<TDraft, TRequest>({
   errorFallback,
   applyResult,
   setActionError,
+  onSaved,
   paused = false
 }: HoshidictsAutosaveOptions<TDraft, TRequest>) {
   const [draft, setDraft] = useState<TDraft>(() => initialDraft());
@@ -56,10 +62,11 @@ export function useHoshidictsAutosave<TDraft, TRequest>({
 
   const syncDraft = useCallback(
     (nextDraft: TDraft, force = false) => {
-      if (!force && (dirtyRef.current || savingRef.current)) return;
+      if (!force && (dirtyRef.current || savingRef.current)) return false;
       const next = cloneDraft(nextDraft);
       draftRef.current = next;
       setDraft(next);
+      return true;
     },
     [cloneDraft]
   );
@@ -74,7 +81,8 @@ export function useHoshidictsAutosave<TDraft, TRequest>({
       return false;
     }
 
-    const request = toRequest(cloneDraft(draftRef.current));
+    const sourceDraft = cloneDraft(draftRef.current);
+    const request = toRequest(sourceDraft);
     const version = editVersionRef.current;
     savingRef.current = true;
     setSaving(true);
@@ -87,10 +95,12 @@ export function useHoshidictsAutosave<TDraft, TRequest>({
           setSaveStatus("error");
           return false;
         }
+        onSaved?.(request, cloneDraft(draftRef.current));
         if (editVersionRef.current === version) {
           dirtyRef.current = false;
           setDirty(false);
-          const next = cloneDraft(savedDraft(result, request));
+          const currentDraft = cloneDraft(draftRef.current);
+          const next = cloneDraft(savedDraft(result, request, currentDraft));
           draftRef.current = next;
           setDraft(next);
           setSaveStatus("saved");
@@ -119,6 +129,7 @@ export function useHoshidictsAutosave<TDraft, TRequest>({
     channel,
     cloneDraft,
     errorFallback,
+    onSaved,
     paused,
     savedDraft,
     setActionError,
