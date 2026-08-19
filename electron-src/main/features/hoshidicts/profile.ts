@@ -1,4 +1,5 @@
 import type {
+    HoshidictsAnkiButton,
     HoshidictsDuplicateBehavior,
     HoshidictsDuplicateScope,
     HoshidictsFieldOverwriteMode,
@@ -9,13 +10,19 @@ import type {
 } from '../../../shared/features/hoshidicts.js';
 import {
     createDefaultHoshidictsFieldOverwriteModes,
+    HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
     HOSHIDICTS_DUPLICATE_BEHAVIORS,
     HOSHIDICTS_DUPLICATE_SCOPES,
     HOSHIDICTS_FIELD_OVERWRITE_MODES,
 } from '../../../shared/features/hoshidicts.js';
 
 export const HOSHIDICTS_MINING_PROFILE_FILE_NAME = 'mining-profile.json';
-const MINING_PROFILE_VERSION = 3;
+const MINING_PROFILE_VERSION = 4;
+const LEGACY_MINING_PROFILE_VERSION = 3;
+export const DEFAULT_HOSHIDICTS_ANKI_BUTTON_ID = HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID;
+const DEFAULT_HOSHIDICTS_ANKI_BUTTON_LABEL = 'Add to Anki';
+const DEFAULT_HOSHIDICTS_ANKI_BUTTON_ICON = 'anki';
+const SAFE_BUTTON_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 const MINING_FIELD_NAMES: readonly HoshidictsMiningFieldName[] = [
     'expression',
@@ -95,10 +102,12 @@ function normalizeFieldTemplates(
     return result;
 }
 
-export function defaultHoshidictsMiningProfile(): HoshidictsMiningProfile {
+function defaultHoshidictsAnkiButton(): HoshidictsAnkiButton {
     return {
-        version: MINING_PROFILE_VERSION,
+        id: DEFAULT_HOSHIDICTS_ANKI_BUTTON_ID,
         enabled: true,
+        label: DEFAULT_HOSHIDICTS_ANKI_BUTTON_LABEL,
+        icon: DEFAULT_HOSHIDICTS_ANKI_BUTTON_ICON,
         deck: 'Default',
         model: '',
         fields: {
@@ -121,14 +130,47 @@ export function defaultHoshidictsMiningProfile(): HoshidictsMiningProfile {
     };
 }
 
-export function normalizeHoshidictsMiningProfile(
-    value: unknown
-): HoshidictsMiningProfile {
+export function defaultHoshidictsMiningProfile(): HoshidictsMiningProfile {
+    return {
+        version: MINING_PROFILE_VERSION,
+        enabled: true,
+        buttons: [defaultHoshidictsAnkiButton()],
+    };
+}
+
+function normalizeHoshidictsAnkiButton(
+    value: unknown,
+    defaults: Pick<HoshidictsAnkiButton, 'id' | 'enabled' | 'label' | 'icon'>
+): HoshidictsAnkiButton {
     if (!isRecord(value)) {
-        throw new Error('Hoshidicts mining profile must be an object.');
+        throw new Error('Hoshidicts Anki button must be an object.');
     }
-    if ((value.version ?? MINING_PROFILE_VERSION) !== MINING_PROFILE_VERSION) {
-        throw new Error('Hoshidicts mining profile version is unsupported.');
+    const id = normalizeProfileString(
+        value.id,
+        'Hoshidicts Anki button id',
+        defaults.id
+    );
+    if (!SAFE_BUTTON_ID_PATTERN.test(id)) {
+        throw new Error('Hoshidicts Anki button id is invalid.');
+    }
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+        throw new Error('Hoshidicts Anki button enabled state is invalid.');
+    }
+    const label = normalizeProfileString(
+        value.label,
+        'Hoshidicts Anki button label',
+        defaults.label
+    );
+    if (!label) {
+        throw new Error('Hoshidicts Anki button label is invalid.');
+    }
+    const icon = normalizeProfileString(
+        value.icon,
+        'Hoshidicts Anki button icon',
+        defaults.icon
+    );
+    if (!icon) {
+        throw new Error('Hoshidicts Anki button icon is invalid.');
     }
     const rawFields = value.fields ?? {};
     if (!isRecord(rawFields)) {
@@ -223,8 +265,11 @@ export function normalizeHoshidictsMiningProfile(
     }
 
     return {
-        version: MINING_PROFILE_VERSION,
-        enabled: value.enabled !== false,
+        id,
+        enabled:
+            value.enabled === undefined ? defaults.enabled : value.enabled,
+        label,
+        icon,
         deck:
             normalizeProfileString(
                 value.deck,
@@ -280,5 +325,62 @@ export function normalizeHoshidictsMiningProfile(
             (value.duplicatePolicy === 'allow' ? 'new' : 'prevent'),
         fieldOverwriteModes: fieldOverwriteModes as HoshidictsFieldOverwriteModes,
         fieldTemplates: normalizeFieldTemplates(value.fieldTemplates),
+    };
+}
+
+export function normalizeHoshidictsMiningProfile(
+    value: unknown,
+    legacyAddToAnkiVisible = true
+): HoshidictsMiningProfile {
+    if (!isRecord(value)) {
+        throw new Error('Hoshidicts mining profile must be an object.');
+    }
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+        throw new Error('Hoshidicts mining enabled state is invalid.');
+    }
+    const version = value.version ?? LEGACY_MINING_PROFILE_VERSION;
+    if (version === LEGACY_MINING_PROFILE_VERSION) {
+        const legacyButton = {
+            ...value,
+            enabled: legacyAddToAnkiVisible,
+        };
+        return {
+            version: MINING_PROFILE_VERSION,
+            enabled: value.enabled !== false,
+            buttons: [
+                normalizeHoshidictsAnkiButton(legacyButton, {
+                    id: DEFAULT_HOSHIDICTS_ANKI_BUTTON_ID,
+                    enabled: legacyAddToAnkiVisible,
+                    label: DEFAULT_HOSHIDICTS_ANKI_BUTTON_LABEL,
+                    icon: DEFAULT_HOSHIDICTS_ANKI_BUTTON_ICON,
+                }),
+            ],
+        };
+    }
+    if (version !== MINING_PROFILE_VERSION) {
+        throw new Error('Hoshidicts mining profile version is unsupported.');
+    }
+    if (!Array.isArray(value.buttons)) {
+        throw new Error('Hoshidicts Anki buttons must be an array.');
+    }
+    const ids = new Set<string>();
+    const defaults = {
+        id: '',
+        enabled: true,
+        label: '',
+        icon: '',
+    };
+    const buttons = value.buttons.map((button) => {
+        const normalized = normalizeHoshidictsAnkiButton(button, defaults);
+        if (ids.has(normalized.id)) {
+            throw new Error('Hoshidicts Anki button ids must be unique.');
+        }
+        ids.add(normalized.id);
+        return normalized;
+    });
+    return {
+        version: MINING_PROFILE_VERSION,
+        enabled: value.enabled !== false,
+        buttons,
     };
 }

@@ -1,10 +1,12 @@
 import {
   createDefaultHoshidictsAudioProfile,
   createDefaultHoshidictsFieldOverwriteModes,
+  HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID,
   HOSHIDICTS_MINING_FIELD_MARKERS,
   isHoshidictsActivationKey,
   parseHoshidictsCustomDictionary,
   type HoshidictsActivationKey,
+  type HoshidictsAnkiButton,
   type HoshidictsAudioProfile,
   type HoshidictsDesktopSnapshot,
   type HoshidictsFrequencyMode,
@@ -24,12 +26,18 @@ export type HoshidictsView =
   | "audio"
   | "mining";
 export type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
-export type MiningProfileDraft = Omit<HoshidictsMiningProfile, "tags"> & {
+export type MiningProfileDraft = Omit<
+  HoshidictsAnkiButton,
+  "enabled" | "tags"
+> & {
+  version: 4;
+  enabled: boolean;
   tags: string;
+  buttons: HoshidictsAnkiButton[];
 };
 
 export type MiningFieldTemplate = NonNullable<
-  HoshidictsMiningProfile["fieldTemplates"]
+  HoshidictsAnkiButton["fieldTemplates"]
 >[string];
 
 const ACTIVATION_KEY_BY_CODE: Readonly<
@@ -209,19 +217,27 @@ function legacyMiningFieldTemplate(
 }
 
 export const DEFAULT_MINING_PROFILE: HoshidictsMiningProfile = {
-  version: 3,
+  version: 4,
   enabled: true,
-  deck: "Default",
-  model: "",
-  fields: { ...EMPTY_FIELDS },
-  disabledFields: [],
-  tags: ["hoshidicts"],
-  checkForDuplicates: true,
-  duplicateScope: "collection",
-  duplicateScopeCheckAllModels: false,
-  duplicateBehavior: "prevent",
-  fieldOverwriteModes: createDefaultHoshidictsFieldOverwriteModes(),
-  fieldTemplates: null
+  buttons: [
+    {
+      id: "add-to-anki",
+      enabled: true,
+      label: "Add to Anki",
+      icon: "anki",
+      deck: "Default",
+      model: "",
+      fields: { ...EMPTY_FIELDS },
+      disabledFields: [],
+      tags: ["hoshidicts"],
+      checkForDuplicates: true,
+      duplicateScope: "collection",
+      duplicateScopeCheckAllModels: false,
+      duplicateBehavior: "prevent",
+      fieldOverwriteModes: createDefaultHoshidictsFieldOverwriteModes(),
+      fieldTemplates: null
+    }
+  ]
 };
 
 export const DEFAULT_MINING_OPTIONS: HoshidictsMiningOptions = {
@@ -243,21 +259,44 @@ export const DEFAULT_MINING_OPTIONS: HoshidictsMiningOptions = {
 export function copyMiningProfile(
   profile: HoshidictsMiningProfile = DEFAULT_MINING_PROFILE
 ): HoshidictsMiningProfile {
+  const candidate = profile as unknown as Record<string, unknown>;
+  if (!Array.isArray(candidate.buttons)) {
+    const { version: _version, enabled, ...legacyButton } = candidate;
+    const defaults = DEFAULT_MINING_PROFILE.buttons[0];
+    return copyMiningProfile({
+      version: 4,
+      enabled: enabled !== false,
+      buttons: [
+        {
+          ...defaults,
+          ...legacyButton,
+          id: defaults.id,
+          enabled: true,
+          label: defaults.label,
+          icon: defaults.icon
+        } as HoshidictsAnkiButton
+      ]
+    });
+  }
   return {
-    ...profile,
-    fields: { ...profile.fields },
-    fieldOverwriteModes: { ...profile.fieldOverwriteModes },
-    disabledFields: [...profile.disabledFields],
-    fieldTemplates:
-      profile.fieldTemplates === null
-        ? null
-        : Object.fromEntries(
-            Object.entries(profile.fieldTemplates).map(([field, template]) => [
-              field,
-              { ...template }
-            ])
-          ),
-    tags: [...profile.tags]
+    version: 4,
+    enabled: profile.enabled,
+    buttons: profile.buttons.map((button) => ({
+      ...button,
+      fields: { ...button.fields },
+      fieldOverwriteModes: { ...button.fieldOverwriteModes },
+      disabledFields: [...button.disabledFields],
+      fieldTemplates:
+        button.fieldTemplates === null
+          ? null
+          : Object.fromEntries(
+              Object.entries(button.fieldTemplates).map(([field, template]) => [
+                field,
+                { ...template }
+              ])
+            ),
+      tags: [...button.tags]
+    }))
   };
 }
 
@@ -274,17 +313,33 @@ export function copyAudioProfile(
 export function profileToDraft(
   profile: HoshidictsMiningProfile
 ): MiningProfileDraft {
+  const copy = copyMiningProfile(profile);
+  const button =
+    copy.buttons.find(({ id }) => id === HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID) ??
+    copyMiningProfile(DEFAULT_MINING_PROFILE).buttons[0];
   return {
-    ...copyMiningProfile(profile),
-    tags: profile.tags.join(", ")
+    ...button,
+    version: 4,
+    enabled: copy.enabled,
+    buttons: copy.buttons,
+    tags: button.tags.join(", ")
   };
 }
 
 export function draftToProfile(
   draft: MiningProfileDraft
 ): HoshidictsMiningProfile {
-  return {
-    ...draft,
+  const tags = draft.tags
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  const { version: _version, buttons, ...buttonDraft } = draft;
+  const buttonIndex = buttons.findIndex(
+    ({ id }) => id === HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID
+  );
+  const button = {
+    ...buttonDraft,
+    enabled: buttons[buttonIndex]?.enabled ?? true,
     fields: { ...draft.fields },
     fieldOverwriteModes: { ...draft.fieldOverwriteModes },
     disabledFields: [...draft.disabledFields],
@@ -297,10 +352,17 @@ export function draftToProfile(
               { ...template }
             ])
           ),
-    tags: draft.tags
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter(Boolean)
+    tags
+  };
+  return {
+    version: 4,
+    enabled: draft.enabled,
+    buttons:
+      buttonIndex < 0
+        ? [...buttons, button]
+        : buttons.map((existing, index) =>
+            index === buttonIndex ? button : existing
+          )
   };
 }
 
@@ -313,7 +375,7 @@ export function visibleMiningFields(
   const seen = new Set<string>();
   return LEGACY_MINING_FIELD_NAMES.flatMap((field) => {
     if (draft.disabledFields.includes(field)) return [];
-    const target = draft.fields[field];
+    const target = draft.fields[field] ?? "";
     const key = target.toLowerCase();
     if (!target || seen.has(key)) return [];
     seen.add(key);
@@ -349,7 +411,7 @@ export function materializeMiningFieldTemplates(
   draft: MiningProfileDraft,
   options: HoshidictsMiningOptions,
   visibleFields = visibleMiningFields(draft, options)
-): NonNullable<HoshidictsMiningProfile["fieldTemplates"]> {
+): NonNullable<HoshidictsAnkiButton["fieldTemplates"]> {
   return Object.fromEntries(
     visibleFields.map((field) => [
       field,

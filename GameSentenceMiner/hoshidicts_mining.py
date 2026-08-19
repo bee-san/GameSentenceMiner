@@ -64,6 +64,7 @@ from GameSentenceMiner.util.config.configuration import get_app_directory, get_c
 
 HOSHIDICTS_MINING_PROFILE_FILE = "mining-profile.json"
 HOSHIDICTS_MINING_PROFILE_VERSION = 3
+HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID = "add-to-anki"
 MAX_PROFILE_BYTES = 64 * 1024
 MAX_BROWSE_REQUEST_BYTES = 64 * 1024
 MINING_STATUS_CACHE_SECONDS = 2.0
@@ -152,6 +153,28 @@ def normalize_hoshidicts_mining_profile(value: Any) -> dict[str, Any]:
     """
     if not isinstance(value, dict):
         raise HoshidictsMiningError("Hoshidicts mining profile must be an object.")
+    if value.get("version") == 4:
+        buttons = value.get("buttons")
+        if not isinstance(buttons, list):
+            raise HoshidictsMiningError("Hoshidicts Anki buttons must be an array.")
+        if not buttons:
+            value = {**default_hoshidicts_mining_profile(), "enabled": False}
+        else:
+            default_button = next(
+                (
+                    button
+                    for button in buttons
+                    if isinstance(button, dict) and button.get("id") == HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID
+                ),
+                None,
+            )
+            if default_button is None:
+                raise HoshidictsMiningError("Hoshidicts default Anki button is missing.")
+            value = {
+                **default_button,
+                "version": HOSHIDICTS_MINING_PROFILE_VERSION,
+                "enabled": value.get("enabled") is not False and default_button.get("enabled") is not False,
+            }
     if value.get("version", HOSHIDICTS_MINING_PROFILE_VERSION) != HOSHIDICTS_MINING_PROFILE_VERSION:
         raise HoshidictsMiningError("Hoshidicts mining profile version is unsupported.")
 

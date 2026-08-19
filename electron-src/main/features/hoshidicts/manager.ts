@@ -619,15 +619,19 @@ function normalizePersistedProfiles(
                 installedIds.has(id)
             ),
         }));
+        const reader = normalizeReaderPreferences(
+            candidate.reader,
+            dictionaries,
+            enabledIds
+        );
         return {
             id: candidate.id,
             name,
-            reader: normalizeReaderPreferences(
-                candidate.reader,
-                dictionaries,
-                enabledIds
+            reader,
+            mining: normalizeHoshidictsMiningProfile(
+                candidate.mining,
+                reader.popupButtons.addToAnki
             ),
-            mining: normalizeHoshidictsMiningProfile(candidate.mining),
             audio: normalizeHoshidictsAudioProfile(candidate.audio),
             tabGroups,
             enabledDictionaryIds,

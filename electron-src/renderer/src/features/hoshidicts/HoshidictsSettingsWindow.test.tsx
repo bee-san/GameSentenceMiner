@@ -144,6 +144,13 @@ describe("HoshidictsSettingsWindow", () => {
     return calls[calls.length - 1];
   };
 
+  const lastMiningButton = (): Record<string, unknown> | undefined => {
+    const profile = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1] as
+      | { buttons?: Record<string, unknown>[] }
+      | undefined;
+    return profile?.buttons?.[0];
+  };
+
   it("shows the compact profile control and switches or clones profiles", async () => {
     const profileState: HoshidictsDesktopSnapshot = {
       ...baseState,
@@ -2508,9 +2515,7 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       fieldTemplates: {
         Front: { value: "x", overwriteMode: "append" },
         Back: { value: "y", overwriteMode: "coalesce" }
@@ -3063,22 +3068,19 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(invokeMock).toHaveBeenCalledWith(
-      HOSHIDICTS_CHANNELS.setMiningProfile,
-      expect.objectContaining({
-        checkForDuplicates: true,
-        duplicateScope: "deck-root",
-        duplicateScopeCheckAllModels: true,
-        duplicateBehavior: "overwrite",
-        fieldTemplates: expect.objectContaining({
-          Expression: {
-            value: "{expression}",
-            overwriteMode: "overwrite"
-          },
-          Front: { value: "", overwriteMode: "coalesce" }
-        })
+    expect(lastMiningButton()).toMatchObject({
+      checkForDuplicates: true,
+      duplicateScope: "deck-root",
+      duplicateScopeCheckAllModels: true,
+      duplicateBehavior: "overwrite",
+      fieldTemplates: expect.objectContaining({
+        Expression: {
+          value: "{expression}",
+          overwriteMode: "overwrite"
+        },
+        Front: { value: "", overwriteMode: "coalesce" }
       })
-    );
+    });
   });
 
   it.each([
@@ -3134,9 +3136,7 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       deck: "",
       duplicateScope: "collection"
     });
@@ -3168,27 +3168,24 @@ describe("HoshidictsSettingsWindow", () => {
       );
     });
 
-    expect(invokeMock).toHaveBeenCalledWith(
-      HOSHIDICTS_CHANNELS.setMiningProfile,
-      expect.objectContaining({
-        fieldTemplates: {
-          Expression: { value: "{expression}", overwriteMode: "coalesce" },
-          ExpressionReading: {
-            value: "{reading}",
-            overwriteMode: "coalesce"
-          },
-          Glossary: { value: "{sentence}", overwriteMode: "coalesce" },
-          Sentence: { value: "{sentence}", overwriteMode: "coalesce" },
-          Frequency: { value: "{frequency}", overwriteMode: "coalesce" },
-          PitchPosition: {
-            value: "{pitch-position}",
-            overwriteMode: "coalesce"
-          },
-          WordAudio: { value: "", overwriteMode: "coalesce" },
-          Front: { value: "x", overwriteMode: "coalesce" }
-        }
-      })
-    );
+    expect(lastMiningButton()).toMatchObject({
+      fieldTemplates: {
+        Expression: { value: "{expression}", overwriteMode: "coalesce" },
+        ExpressionReading: {
+          value: "{reading}",
+          overwriteMode: "coalesce"
+        },
+        Glossary: { value: "{sentence}", overwriteMode: "coalesce" },
+        Sentence: { value: "{sentence}", overwriteMode: "coalesce" },
+        Frequency: { value: "{frequency}", overwriteMode: "coalesce" },
+        PitchPosition: {
+          value: "{pitch-position}",
+          overwriteMode: "coalesce"
+        },
+        WordAudio: { value: "", overwriteMode: "coalesce" },
+        Front: { value: "x", overwriteMode: "coalesce" }
+      }
+    });
     expect(container.querySelector("button")?.textContent).not.toBe(
       "Save Mining Profile"
     );
@@ -3285,7 +3282,7 @@ describe("HoshidictsSettingsWindow", () => {
     }, 1);
     await act(flushAutosave);
 
-    const saved = lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1];
+    const saved = lastMiningButton();
     expect(saved).toMatchObject({
       model: "Lapis",
       fieldTemplates: null,
@@ -3329,9 +3326,7 @@ describe("HoshidictsSettingsWindow", () => {
       HOSHIDICTS_CHANNELS.getMiningOptions,
       "Kiku"
     );
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       model: "Kiku",
       fieldTemplates: {
         Front: { value: "x", overwriteMode: "coalesce" }
@@ -3350,9 +3345,7 @@ describe("HoshidictsSettingsWindow", () => {
       HOSHIDICTS_CHANNELS.getMiningOptions,
       ""
     );
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({
+    expect(lastMiningButton()).toMatchObject({
       model: "",
       fieldTemplates: {
         Front: { value: "x", overwriteMode: "coalesce" }
@@ -3414,9 +3407,7 @@ describe("HoshidictsSettingsWindow", () => {
       HOSHIDICTS_CHANNELS.getMiningOptions,
       ""
     );
-    expect(
-      lastCallFor(HOSHIDICTS_CHANNELS.setMiningProfile)?.[1]
-    ).toMatchObject({ model: "", fieldTemplates: null });
+    expect(lastMiningButton()).toMatchObject({ model: "", fieldTemplates: null });
   });
 
 });

@@ -5,6 +5,8 @@ import {
     type GsmThemeId,
 } from '../themes.js';
 
+export const HOSHIDICTS_DEFAULT_ANKI_BUTTON_ID = 'add-to-anki';
+
 export const HOSHIDICTS_CHANNELS = {
     openSettings: 'hoshidicts.openSettings',
     getState: 'hoshidicts.getState',
@@ -1404,9 +1406,11 @@ export function isHoshidictsAudioSourceType(
     );
 }
 
-export interface HoshidictsMiningProfile {
-    version: 3;
+export interface HoshidictsAnkiButton {
+    id: string;
     enabled: boolean;
+    label: string;
+    icon: string;
     deck: string;
     model: string;
     fields: HoshidictsMiningFields;
@@ -1418,6 +1422,71 @@ export interface HoshidictsMiningProfile {
     duplicateBehavior: HoshidictsDuplicateBehavior;
     fieldOverwriteModes: HoshidictsFieldOverwriteModes;
     fieldTemplates: HoshidictsMiningFieldTemplates | null;
+}
+
+export interface HoshidictsMiningProfile {
+    version: 4;
+    enabled: boolean;
+    buttons: HoshidictsAnkiButton[];
+}
+
+export function cloneHoshidictsMiningProfile(
+    profile: HoshidictsMiningProfile
+): HoshidictsMiningProfile {
+    return {
+        version: 4,
+        enabled: profile.enabled,
+        buttons: profile.buttons.map((button) => ({
+            ...button,
+            fields: { ...button.fields },
+            disabledFields: [...button.disabledFields],
+            tags: [...button.tags],
+            fieldOverwriteModes: { ...button.fieldOverwriteModes },
+            fieldTemplates:
+                button.fieldTemplates === null
+                    ? null
+                    : Object.fromEntries(
+                          Object.entries(button.fieldTemplates).map(
+                              ([field, template]) => [field, { ...template }]
+                          )
+                      ),
+        })),
+    };
+}
+
+function hoshidictsMiningValuesEqual(left: unknown, right: unknown): boolean {
+    if (left === right) {
+        return true;
+    }
+    if (Array.isArray(left) || Array.isArray(right)) {
+        return (
+            Array.isArray(left) &&
+            Array.isArray(right) &&
+            left.length === right.length &&
+            left.every((value, index) =>
+                hoshidictsMiningValuesEqual(value, right[index])
+            )
+        );
+    }
+    if (!isHoshidictsRecord(left) || !isHoshidictsRecord(right)) {
+        return false;
+    }
+    const keys = Object.keys(left);
+    return (
+        keys.length === Object.keys(right).length &&
+        keys.every(
+            (key) =>
+                Object.hasOwn(right, key) &&
+                hoshidictsMiningValuesEqual(left[key], right[key])
+        )
+    );
+}
+
+export function hoshidictsMiningProfilesEqual(
+    left: HoshidictsMiningProfile,
+    right: HoshidictsMiningProfile
+): boolean {
+    return hoshidictsMiningValuesEqual(left, right);
 }
 
 export interface HoshidictsMiningOptions {

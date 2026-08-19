@@ -68,7 +68,7 @@ function resetMiningFieldMappings(
 ): MiningProfileDraft {
   return {
     ...draft,
-    fields: { ...DEFAULT_MINING_PROFILE.fields },
+    fields: { ...DEFAULT_MINING_PROFILE.buttons[0].fields },
     disabledFields: [],
     fieldOverwriteModes: createDefaultHoshidictsFieldOverwriteModes(),
     fieldTemplates: null
@@ -93,6 +93,22 @@ type NumericDefinitionBlurPreference = {
 function copyMiningDraft(draft: MiningProfileDraft): MiningProfileDraft {
   return {
     ...draft,
+    buttons: draft.buttons.map((button) => ({
+      ...button,
+      fields: { ...button.fields },
+      fieldOverwriteModes: { ...button.fieldOverwriteModes },
+      disabledFields: [...button.disabledFields],
+      fieldTemplates:
+        button.fieldTemplates === null
+          ? null
+          : Object.fromEntries(
+              Object.entries(button.fieldTemplates).map(([field, template]) => [
+                field,
+                { ...template }
+              ])
+            ),
+      tags: [...button.tags]
+    })),
     fields: { ...draft.fields },
     fieldOverwriteModes: { ...draft.fieldOverwriteModes },
     disabledFields: [...draft.disabledFields],

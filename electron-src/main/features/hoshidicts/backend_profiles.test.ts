@@ -41,6 +41,14 @@ async function readJson(filePath: string): Promise<unknown> {
     return JSON.parse(await fsp.readFile(filePath, 'utf8')) as unknown;
 }
 
+function miningProfile(overrides: Record<string, unknown> = {}) {
+    const profile = defaultHoshidictsMiningProfile();
+    return {
+        ...profile,
+        buttons: [{ ...profile.buttons[0], ...overrides }],
+    };
+}
+
 afterEach(async () => {
     while (temporaryDirectories.length > 0) {
         const directory = temporaryDirectories.pop();
@@ -86,7 +94,7 @@ async function writeTwoProfileRoot(baseDirectory: string): Promise<string> {
         id,
         name,
         reader: {},
-        mining: { ...defaultHoshidictsMiningProfile(), deck },
+        mining: miningProfile({ deck }),
         audio: defaultHoshidictsAudioProfile(),
         tabGroups: [],
         enabledDictionaryIds: enabled,
@@ -142,18 +150,14 @@ describe('Hoshidicts backend profile files', () => {
         const baseDirectory = makeBaseDirectory();
         const manager = makeManager(baseDirectory);
 
-        await manager.setMiningProfile({
-            ...defaultHoshidictsMiningProfile(),
-            enabled: true,
-            deck: 'Mining',
-            model: 'Japanese',
-        });
+        await manager.setMiningProfile(
+            miningProfile({ enabled: true, deck: 'Mining', model: 'Japanese' })
+        );
 
         expect(await readJson(manager.miningProfilePath)).toMatchObject({
-            version: 3,
+            version: 4,
             enabled: true,
-            deck: 'Mining',
-            model: 'Japanese',
+            buttons: [expect.objectContaining({ deck: 'Mining', model: 'Japanese' })],
         });
     });
 
@@ -178,17 +182,11 @@ describe('Hoshidicts backend profile files', () => {
         const baseDirectory = makeBaseDirectory();
         const manager = makeManager(baseDirectory);
 
-        await manager.setMiningProfile({
-            ...defaultHoshidictsMiningProfile(),
-            deck: 'Original',
-        });
+        await manager.setMiningProfile(miningProfile({ deck: 'Original' }));
         const created = await manager.createProfile('Second');
-        await manager.setMiningProfile({
-            ...defaultHoshidictsMiningProfile(),
-            deck: 'Second deck',
-        });
+        await manager.setMiningProfile(miningProfile({ deck: 'Second deck' }));
         expect(await readJson(manager.miningProfilePath)).toMatchObject({
-            deck: 'Second deck',
+            buttons: [expect.objectContaining({ deck: 'Second deck' })],
         });
 
         const original = created.profiles.find(({ name }) => name !== 'Second');
@@ -196,24 +194,21 @@ describe('Hoshidicts backend profile files', () => {
         await manager.switchProfile(original!.id);
 
         expect(await readJson(manager.miningProfilePath)).toMatchObject({
-            deck: 'Original',
+            buttons: [expect.objectContaining({ deck: 'Original' })],
         });
     });
 
     it('backfills the profile files for an install that only has a manifest', async () => {
         const baseDirectory = makeBaseDirectory();
         const manager = makeManager(baseDirectory);
-        await manager.setMiningProfile({
-            ...defaultHoshidictsMiningProfile(),
-            deck: 'Backfilled',
-        });
+        await manager.setMiningProfile(miningProfile({ deck: 'Backfilled' }));
         await fsp.rm(manager.miningProfilePath);
         await fsp.rm(manager.audioProfilePath);
 
         await manager.syncBackendProfiles();
 
         expect(await readJson(manager.miningProfilePath)).toMatchObject({
-            deck: 'Backfilled',
+            buttons: [expect.objectContaining({ deck: 'Backfilled' })],
         });
         expect(await readJson(manager.audioProfilePath)).toMatchObject({
             version: 1,
@@ -234,7 +229,7 @@ describe('Hoshidicts backend profile files', () => {
         // Publish the starting point: the active profile is "second".
         await manager.syncBackendProfiles();
         expect(await readJson(manager.miningProfilePath)).toMatchObject({
-            deck: 'Second deck',
+            buttons: [expect.objectContaining({ deck: 'Second deck' })],
         });
 
         // Switching enables a dictionary, so this takes the native-reload path.
@@ -245,9 +240,9 @@ describe('Hoshidicts backend profile files', () => {
 
         // The manifest rolled back to "second", so the published profile must too.
         expect(await readJson(manager.miningProfilePath)).toMatchObject({
-            deck: 'Second deck',
+            buttons: [expect.objectContaining({ deck: 'Second deck' })],
         });
-        expect((await manager.getSnapshot()).miningProfile.deck).toBe(
+        expect((await manager.getSnapshot()).miningProfile.buttons[0].deck).toBe(
             'Second deck'
         );
     });
@@ -264,16 +259,17 @@ describe('Hoshidicts backend profile files', () => {
         );
 
         await expect(
-            manager.setMiningProfile({
-                ...defaultHoshidictsMiningProfile(),
-                deck: 'Too big',
-                fieldTemplates: Object.fromEntries(
-                    Array.from({ length: 40 }, (_unused, index) => [
-                        `field-${index}`,
-                        { value: 'x'.repeat(2000), overwriteMode: 'coalesce' },
-                    ])
-                ),
-            })
+            manager.setMiningProfile(
+                miningProfile({
+                    deck: 'Too big',
+                    fieldTemplates: Object.fromEntries(
+                        Array.from({ length: 40 }, (_unused, index) => [
+                            `field-${index}`,
+                            { value: 'x'.repeat(2000), overwriteMode: 'coalesce' },
+                        ])
+                    ),
+                })
+            )
         ).rejects.toThrow('Hoshidicts mining profile exceeded its size limit.');
 
         // Nothing was written, so an unrelated later save still succeeds.

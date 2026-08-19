@@ -305,6 +305,41 @@ def test_profile_defaults_and_normalization(tmp_path):
     assert set(profile["fieldOverwriteModes"].values()) == {"coalesce"}
 
 
+def test_profile_v4_loads_the_stable_default_button_for_legacy_mining_calls(tmp_path):
+    saved = tmp_path / "mining-profile.json"
+    saved.write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "enabled": True,
+                "buttons": [
+                    {
+                        **make_mining_profile(deck="Recognition", model="Japanese"),
+                        "id": "recognition",
+                        "enabled": True,
+                        "label": "Recognition",
+                        "icon": "anki",
+                    },
+                    {
+                        **make_mining_profile(deck="Production", model="Japanese Production"),
+                        "id": "add-to-anki",
+                        "enabled": True,
+                        "label": "Production",
+                        "icon": "sparkles",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profile = hoshidicts_mining.load_hoshidicts_mining_profile(saved)
+
+    assert profile["version"] == 3
+    assert profile["deck"] == "Production"
+    assert profile["model"] == "Japanese Production"
+
+
 def test_profile_v3_normalizes_target_field_templates_without_trimming_values():
     default_profile = hoshidicts_mining.default_hoshidicts_mining_profile()
     assert default_profile["version"] == 3
@@ -395,7 +430,7 @@ def test_profile_normalizes_yomitan_duplicate_settings_and_overwrite_modes():
         ({"fields": []}, "profile is invalid"),
         ({"tags": "hoshidicts"}, "profile is invalid"),
         ({"fieldTemplates": []}, "profile is invalid"),
-        ({"version": 4}, "version is unsupported"),
+        ({"version": 4}, "Anki buttons must be an array"),
         ({"version": 2}, "version is unsupported"),
     ],
 )

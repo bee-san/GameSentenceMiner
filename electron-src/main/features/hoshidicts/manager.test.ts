@@ -1077,7 +1077,9 @@ describe('Hoshidicts settings profiles', () => {
         });
         await manager.setMiningProfile({
             ...created.miningProfile,
-            deck: 'Persona',
+            buttons: created.miningProfile.buttons.map((button, index) =>
+                index === 0 ? { ...button, deck: 'Persona' } : button
+            ),
         });
         await manager.createTabGroup('Names', alphaId);
         await manager.setDictionaryPresentation(alphaId, true);
@@ -1087,7 +1089,7 @@ describe('Hoshidicts settings profiles', () => {
         expect(reloadNative).toHaveBeenCalledOnce();
         expect(defaultProfile.lookupMode).toBe('shift');
         expect(defaultProfile.audioProfile.volume).toBe(100);
-        expect(defaultProfile.miningProfile.deck).toBe('Default');
+        expect(defaultProfile.miningProfile.buttons[0].deck).toBe('Default');
         expect(defaultProfile.tabGroups).toEqual([]);
         expect(defaultProfile.dictionaries[0]).toMatchObject({
             enabled: true,
@@ -1099,7 +1101,7 @@ describe('Hoshidicts settings profiles', () => {
         expect(reloadNative).toHaveBeenCalledOnce();
         expect(persona.lookupMode).toBe('hover');
         expect(persona.audioProfile.volume).toBe(25);
-        expect(persona.miningProfile.deck).toBe('Persona');
+        expect(persona.miningProfile.buttons[0].deck).toBe('Persona');
         expect(persona.tabGroups).toEqual([
             expect.objectContaining({ name: 'Names', dictionaryIds: [alphaId] }),
         ]);
@@ -1637,35 +1639,24 @@ describe('Hoshidicts mining profile', () => {
         });
 
         expect(snapshot.miningProfile).toEqual({
-            version: 3,
+            version: 4,
             enabled: false,
-            deck: 'Mining',
-            model: 'Custom',
-            fields: {
-                expression: 'Front',
-                reading: 'Kana',
-                definition: '',
-                sentence: '',
-                frequency: '',
-                pitch: '',
-                audio: '',
-            },
-            disabledFields: [],
-            tags: ['hoshidicts', 'custom'],
-            checkForDuplicates: true,
-            duplicateScope: 'collection',
-            duplicateScopeCheckAllModels: false,
-            duplicateBehavior: 'new',
-            fieldOverwriteModes: {
-                expression: 'coalesce',
-                reading: 'coalesce',
-                definition: 'coalesce',
-                sentence: 'coalesce',
-                frequency: 'coalesce',
-                pitch: 'coalesce',
-                audio: 'coalesce',
-            },
-            fieldTemplates: null,
+            buttons: [
+                expect.objectContaining({
+                    id: 'add-to-anki',
+                    enabled: true,
+                    label: 'Add to Anki',
+                    icon: 'anki',
+                    deck: 'Mining',
+                    model: 'Custom',
+                    fields: expect.objectContaining({
+                        expression: 'Front',
+                        reading: 'Kana',
+                    }),
+                    tags: ['hoshidicts', 'custom'],
+                    duplicateBehavior: 'new',
+                }),
+            ],
         });
         expect(readActiveProfile(baseDir).mining).toEqual(snapshot.miningProfile);
         // The manifest plus the two files the Python backend reads; no strays.
@@ -1686,9 +1677,8 @@ describe('Hoshidicts mining profile', () => {
                     expression: 'overwrite',
                     reading: 'skip',
                 },
-            })
+            }).buttons[0]
         ).toMatchObject({
-            version: 3,
             checkForDuplicates: false,
             duplicateScope: 'deck-root',
             duplicateScopeCheckAllModels: true,
@@ -1718,7 +1708,7 @@ describe('Hoshidicts mining profile', () => {
             normalizeHoshidictsMiningProfile({
                 fields: { expression: '', reading: 'Kana' },
                 disabledFields: ['definition', 'definition', 'pitch'],
-            })
+            }).buttons[0]
         ).toMatchObject({
             fields: { expression: '', reading: 'Kana' },
             disabledFields: ['definition', 'pitch'],
@@ -1740,7 +1730,7 @@ describe('Hoshidicts mining profile', () => {
                     Notes: { value: 'x', overwriteMode: 'skip' },
                     Unused: { value: '', overwriteMode: 'coalesce' },
                 },
-            }).fieldTemplates
+            }).buttons[0].fieldTemplates
         ).toEqual({
             Expression: {
                 value: '{expression}',
@@ -1777,7 +1767,7 @@ describe('Hoshidicts mining profile', () => {
             normalizeHoshidictsMiningProfile({
                 version: 3,
                 fieldTemplates: {},
-            }).fieldTemplates
+            }).buttons[0].fieldTemplates
         ).toEqual({});
         expect(() =>
             normalizeHoshidictsMiningProfile({ version: 2 })
@@ -2230,7 +2220,7 @@ describe('Hoshidicts snapshots', () => {
             revealMode: 'hover',
             revealDelayMs: 6000,
         });
-        expect(snapshot.miningProfile).toMatchObject({
+        expect(snapshot.miningProfile.buttons[0]).toMatchObject({
             deck: 'Mining',
             model: 'Kiku',
             disabledFields: ['frequency'],
