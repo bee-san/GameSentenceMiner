@@ -333,7 +333,8 @@ export function useHoshidictsSettingsController() {
       try {
         const value = await invokeIpc<HoshidictsMiningOptions>(
           HOSHIDICTS_CHANNELS.getMiningOptions,
-          model
+          model,
+          miningDraftRef.current.selectedButtonId ?? undefined
         );
         if (requestId !== miningOptionsRequestRef.current) return null;
         const normalized = value;

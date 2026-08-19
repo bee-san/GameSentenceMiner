@@ -2374,7 +2374,8 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      undefined
+      undefined,
+      "add-to-anki"
     );
     expect(invokeMock).not.toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.setMiningProfile,
@@ -2398,6 +2399,27 @@ describe("HoshidictsSettingsWindow", () => {
     expect(container.textContent).toContain("7 of 8 fields mapped");
     expect(container.textContent).toContain(
       "All fields from the selected Anki note type are shown"
+    );
+  });
+
+  it("loads Anki options for the selected stable button id", async () => {
+    ipc.configure({
+      state: makeHoshidictsSnapshot({
+        miningProfile: makeHoshidictsMiningProfile({
+          id: "production",
+          label: "Production",
+          model: "Production"
+        })
+      })
+    });
+
+    await render();
+    await openMining();
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      HOSHIDICTS_CHANNELS.getMiningOptions,
+      "Production",
+      "production"
     );
   });
 
@@ -3348,7 +3370,8 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      "Kiku"
+      "Kiku",
+      "add-to-anki"
     );
     expect(lastMiningButton()).toMatchObject({
       model: "Kiku",
@@ -3367,7 +3390,8 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      ""
+      "",
+      "add-to-anki"
     );
     expect(lastMiningButton()).toMatchObject({
       model: "",
@@ -3429,7 +3453,8 @@ describe("HoshidictsSettingsWindow", () => {
 
     expect(invokeMock).toHaveBeenCalledWith(
       HOSHIDICTS_CHANNELS.getMiningOptions,
-      ""
+      "",
+      "add-to-anki"
     );
     expect(lastMiningButton()).toMatchObject({ model: "", fieldTemplates: null });
   });

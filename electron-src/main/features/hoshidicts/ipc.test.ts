@@ -1986,4 +1986,39 @@ describe('Hoshidicts settings IPC', () => {
             ).rejects.toThrow('Hoshidicts note type is invalid.');
         }
     });
+
+    it('validates and forwards the selected mining button id', async () => {
+        const context = await registerHarness();
+        const getMiningOptions = harness.handlers.get(
+            'hoshidicts.getMiningOptions'
+        );
+
+        await expect(
+            getMiningOptions?.(
+                context.settingsEvent,
+                'Production',
+                'production'
+            )
+        ).resolves.toMatchObject({ connected: true });
+        expect(context.getMiningOptions).toHaveBeenCalledWith(
+            'Production',
+            'production'
+        );
+
+        for (const buttonId of [
+            42,
+            '',
+            'button id',
+            'x'.repeat(129),
+            'production\0',
+        ]) {
+            await expect(
+                getMiningOptions?.(
+                    context.settingsEvent,
+                    'Production',
+                    buttonId
+                )
+            ).rejects.toThrow('Hoshidicts Anki button id is invalid.');
+        }
+    });
 });

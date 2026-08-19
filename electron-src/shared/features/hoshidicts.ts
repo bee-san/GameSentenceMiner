@@ -1491,6 +1491,7 @@ export function hoshidictsMiningProfilesEqual(
 
 export interface HoshidictsMiningOptions {
     connected: boolean;
+    buttonId?: string;
     gsmAnkiEnabled: boolean;
     decks: string[];
     noteTypes: string[];

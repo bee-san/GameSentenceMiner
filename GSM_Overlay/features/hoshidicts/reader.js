@@ -85,6 +85,8 @@
   const RECONNECT_INITIAL_DELAY_MS = 750;
   const RECONNECT_MAX_DELAY_MS = 12 * 1000;
   const MINING_STATUS_CACHE_MS = 5 * 1000;
+  const DEFAULT_ANKI_BUTTON_ID = "add-to-anki";
+  const SAFE_ANKI_BUTTON_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
   const MAX_VISIBLE_METADATA_TAGS = 12;
   const SOURCE_HIGHLIGHT_NAME = "gsm-hoshidicts-match";
   const JAPANESE_ONLY_TOKEN_PATTERN =
@@ -3817,6 +3819,42 @@
       return miningStatusCache;
     }
 
+    function miningButtonId(value) {
+      return typeof value === "string" && SAFE_ANKI_BUTTON_ID_PATTERN.test(value)
+        ? value
+        : "";
+    }
+
+    function statusForMiningButton(status, button) {
+      if (!isRecord(status) || !Array.isArray(status.buttons)) {
+        return status;
+      }
+      const buttonStatuses = status.buttons.filter(
+        (entry) => isRecord(entry) && miningButtonId(entry.id)
+      );
+      const requestedId = miningButtonId(button.dataset.buttonId);
+      const selected = requestedId
+        ? buttonStatuses.find((entry) => miningButtonId(entry.id) === requestedId)
+        : buttonStatuses.find(
+            (entry) => miningButtonId(entry.id) === DEFAULT_ANKI_BUTTON_ID
+          ) ??
+          buttonStatuses.find((entry) => entry.enabled === true) ??
+          buttonStatuses[0];
+      if (!selected) {
+        return {
+          available: false,
+          error: requestedId
+            ? "This Anki button is unavailable."
+            : "No valid Anki buttons are available."
+        };
+      }
+      const selectedId = miningButtonId(selected.id);
+      if (selectedId) {
+        button.dataset.buttonId = selectedId;
+      }
+      return selected;
+    }
+
     function miningResultWithFrequencyModes(result) {
       const frequencyModes = new Map(
         preferences.dictionaryPresentation
@@ -4016,11 +4054,11 @@
         : { payload: { ...payload, [key]: included }, bytesAdded };
     }
 
-    function createCompleteMiningPayload(result, candidate, level) {
+    function createCompleteMiningPayload(result, candidate, level, extra = {}) {
       const audioSelection = audioController.getSelection(result);
       const basePayload = createMiningBasePayload(
         { result, candidate },
-        audioSelection ? { audioSelection } : {}
+        { ...(audioSelection ? { audioSelection } : {}), ...extra }
       );
       const generation = level.termView?.dictionaryGeneration ?? null;
       const finish = (dictionaryMedia) => {
@@ -4051,8 +4089,12 @@
 
     function createDuplicateCheckPayload(level, miningItems) {
       const notes = miningItems.map((item) => createMiningBasePayload(item));
+      const buttonId = miningItems.length === 1
+        ? miningButtonId(miningItems[0].button.dataset.buttonId)
+        : "";
+      const requestPayload = buttonId ? { buttonId, notes } : { notes };
       let remainingBytes = MAX_DUPLICATE_CHECK_REQUEST_BYTES - utf8Length(
-        JSON.stringify({ notes })
+        JSON.stringify(requestPayload)
       );
       const generation = level.termView?.dictionaryGeneration ?? null;
       for (let index = 0; index < notes.length && remainingBytes > 0; index += 1) {
@@ -4077,7 +4119,7 @@
         notes[index] = payload;
         remainingBytes -= bytesAdded;
       }
-      return { notes };
+      return requestPayload;
     }
 
     function isLiveMiningRender(level, generation, feedback) {
@@ -4148,21 +4190,35 @@
       if (!isLiveMiningRender(level, generation, feedback)) {
         return;
       }
-      if (status && status.available === true && onMine) {
-        for (const { button } of miningItems) {
-          button.hidden = false;
+      let hasAvailableItem = false;
+      for (const miningItem of miningItems) {
+        const buttonStatus = statusForMiningButton(status, miningItem.button);
+        if (buttonStatus && buttonStatus.available === true && onMine) {
+          hasAvailableItem = true;
+          miningItem.button.hidden = false;
           setMiningButtonState(
-            button,
+            miningItem.button,
             "checking",
             miningInFlight ? "Another note is being added" : ""
           );
+          continue;
         }
+        const reason = buttonStatus && typeof buttonStatus.error === "string"
+          ? buttonStatus.error
+          : "Set up Anki mining in Hoshidicts Settings.";
+        miningItem.button.hidden = true;
+        setMiningButtonState(miningItem.button, "unavailable", reason);
+      }
+      if (hasAvailableItem) {
         if (miningInFlight) {
           return;
         }
         if (!checkMiningNotes) {
-          for (const { button } of miningItems) {
-            setMiningButtonState(button, "ready");
+          for (const miningItem of miningItems) {
+            const buttonStatus = statusForMiningButton(status, miningItem.button);
+            if (buttonStatus && buttonStatus.available === true) {
+              setMiningButtonState(miningItem.button, "ready");
+            }
           }
           return;
         }
@@ -4171,6 +4227,17 @@
             return;
           }
           const miningItem = miningItems[index];
+          const buttonStatus = statusForMiningButton(status, miningItem.button);
+          if (!buttonStatus || buttonStatus.available !== true) {
+            const reason = buttonStatus && typeof buttonStatus.error === "string"
+              ? buttonStatus.error
+              : "Set up Anki mining in Hoshidicts Settings.";
+            miningItem.button.hidden = true;
+            setMiningButtonState(miningItem.button, "unavailable", reason);
+            continue;
+          }
+          miningItem.button.hidden = false;
+          setMiningButtonState(miningItem.button, "checking");
           try {
             const duplicateInfo = await checkMiningNotes(
               createDuplicateCheckPayload(level, [miningItem])
@@ -4221,13 +4288,6 @@
           }
         }
         return;
-      }
-      const reason = status && typeof status.error === "string"
-        ? status.error
-        : "Set up Anki mining in Hoshidicts Settings.";
-      for (const { button } of miningItems) {
-        button.hidden = true;
-        setMiningButtonState(button, "unavailable", reason);
       }
       // Match Yomitan's quiet unavailable state: dictionary results remain the
       // focus, with no setup warning or inert mining affordance. Errors from a
@@ -4354,11 +4414,10 @@
       let added = false;
       let duplicateRejected = false;
       try {
-        let miningPayload = createCompleteMiningPayload(
-          result,
-          candidate,
-          level
-        );
+        const buttonId = miningButtonId(button.dataset.buttonId);
+        let miningPayload = createCompleteMiningPayload(result, candidate, level, {
+          ...(buttonId ? { buttonId } : {})
+        });
         if (miningPayload instanceof Promise) {
           miningPayload = await miningPayload;
         }

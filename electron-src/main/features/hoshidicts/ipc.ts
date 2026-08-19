@@ -51,6 +51,8 @@ import {
 import { getHoshidictsManager, type HoshidictsManager } from './manager.js';
 import { fetchHoshidictsAudioSourceTest } from './audio_source_test.js';
 
+const SAFE_ANKI_BUTTON_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+
 export interface HoshidictsIPCDependencies {
     getMainWindow: () => BrowserWindow | null;
     getSettingsWindow: () => BrowserWindow | null;
@@ -65,7 +67,10 @@ export interface HoshidictsIPCDependencies {
         preferences: HoshidictsReaderPreferences
     ) => Promise<boolean>;
     applyAudioProfile: (profile: HoshidictsAudioProfile) => Promise<boolean>;
-    getMiningOptions: (model?: string) => Promise<HoshidictsMiningOptions>;
+    getMiningOptions: (
+        model?: string,
+        buttonId?: string
+    ) => Promise<HoshidictsMiningOptions>;
     restartOverlay: () => Promise<boolean>;
 }
 
@@ -928,7 +933,7 @@ export function registerHoshidictsIPC(
 
     ipcMain.handle(
         HOSHIDICTS_CHANNELS.getMiningOptions,
-        async (event, model: unknown) => {
+        async (event, model: unknown, buttonId: unknown) => {
             assertSettingsSender(event, deps);
             if (
                 model !== undefined &&
@@ -938,9 +943,19 @@ export function registerHoshidictsIPC(
             ) {
                 throw new Error('Hoshidicts note type is invalid.');
             }
-            return await deps.getMiningOptions(
-                typeof model === 'string' ? model : undefined
-            );
+            if (
+                buttonId !== undefined &&
+                (typeof buttonId !== 'string' ||
+                    !SAFE_ANKI_BUTTON_ID_PATTERN.test(buttonId))
+            ) {
+                throw new Error('Hoshidicts Anki button id is invalid.');
+            }
+            const selectedModel =
+                typeof model === 'string' ? model : undefined;
+            if (typeof buttonId === 'string') {
+                return await deps.getMiningOptions(selectedModel, buttonId);
+            }
+            return await deps.getMiningOptions(selectedModel);
         }
     );
 

@@ -69,6 +69,30 @@ describe('Hoshidicts Anki mining options proxy', () => {
         );
     });
 
+    it('requests options for the selected stable button id', async () => {
+        const fetchMock = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({
+                connected: true,
+                buttonId: 'production',
+                selectedNoteType: 'Production',
+            }),
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(
+            fetchHoshidictsMiningOptions('Production', 'production')
+        ).resolves.toMatchObject({
+            connected: true,
+            buttonId: 'production',
+            selectedNoteType: 'Production',
+        });
+        expect(fetchMock).toHaveBeenCalledWith(
+            'http://127.0.0.1:8123/api/hoshidicts/mining/options?model=Production&buttonId=production',
+            { signal: expect.any(AbortSignal) }
+        );
+    });
+
     it('renders a non-array list as empty instead of throwing', async () => {
         vi.stubGlobal(
             'fetch',

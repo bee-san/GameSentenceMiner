@@ -20,10 +20,12 @@ from tests.test_hoshidicts_factories import (
     DUPLICATE_ERROR,
     FakeAnki,
     duplicate_responses,
+    make_anki_button,
     make_audio_profile,
     make_config,
     make_field_templates,
     make_mining_profile,
+    make_mining_profile_document,
     make_note_fields,
     make_note_info,
     make_overwrite_modes,
@@ -334,10 +336,21 @@ def test_profile_v4_loads_the_stable_default_button_for_legacy_mining_calls(tmp_
     )
 
     profile = hoshidicts_mining.load_hoshidicts_mining_profile(saved)
+    document = hoshidicts_mining.load_hoshidicts_mining_profile_document(saved)
 
     assert profile["version"] == 3
     assert profile["deck"] == "Production"
     assert profile["model"] == "Japanese Production"
+    assert document["version"] == 4
+    assert [button["id"] for button in document["buttons"]] == [
+        "recognition",
+        "add-to-anki",
+    ]
+    assert [button["deck"] for button in document["buttons"]] == [
+        "Recognition",
+        "Production",
+    ]
+    assert all("version" not in button for button in document["buttons"])
 
 
 def test_profile_v4_uses_the_first_enabled_button_when_the_default_is_absent(tmp_path):
@@ -480,6 +493,8 @@ def test_status_inherits_gsm_fields_and_auto_maps_dictionary_fields(monkeypatch)
 
     status = hoshidicts_mining.get_hoshidicts_mining_status()
 
+    buttons = status.pop("buttons")
+    assert status.pop("enabled") is True
     assert status == {
         "available": True,
         "deck": "Default",
@@ -495,6 +510,15 @@ def test_status_inherits_gsm_fields_and_auto_maps_dictionary_fields(monkeypatch)
         },
         "unmappedFields": ["audio"],
     }
+    assert buttons == [
+        {
+            "id": "add-to-anki",
+            "label": "Add to Anki",
+            "icon": "anki",
+            "enabled": True,
+            **status,
+        }
+    ]
 
 
 def test_options_load_anki_choices_and_suggest_kiku_lapis_fields(monkeypatch):
@@ -731,10 +755,21 @@ def test_status_rejects_a_blank_first_field_template(monkeypatch):
 
     status = hoshidicts_mining.get_hoshidicts_mining_status()
 
+    buttons = status.pop("buttons")
+    assert status.pop("enabled") is True
     assert status == {
         "available": False,
         "error": 'The first Anki field "Front" is empty. Map it to a value before mining.',
     }
+    assert buttons == [
+        {
+            "id": "add-to-anki",
+            "label": "Add to Anki",
+            "icon": "anki",
+            "enabled": True,
+            **status,
+        }
+    ]
 
 
 def test_options_accept_a_selected_note_type_and_detect_a_renamed_lapis_schema(monkeypatch):
@@ -783,6 +818,58 @@ def test_options_selected_different_note_type_ignores_saved_target_templates(mon
         {"Expression": "{expression}", "Reading": "{reading}", "Extra": ""}
     )
     assert options["warnings"] == []
+
+
+def test_options_route_resolves_saved_templates_for_the_selected_button(monkeypatch):
+    fields_by_model = {"Recognition": ["Word"], "Production": ["Front"]}
+    fake_anki = FakeAnki(
+        model_names=list(fields_by_model),
+        responses={"modelFieldNames": lambda modelName, **_kwargs: fields_by_model[modelName]},
+    )
+    profile = make_mining_profile_document(
+        make_anki_button(
+            "recognition",
+            label="Recognition",
+            model="Recognition",
+            fieldTemplates=make_field_templates({"Word": "recognize {expression}"}),
+        ),
+        make_anki_button(
+            "production",
+            label="Production",
+            model="Production",
+            fieldTemplates=make_field_templates({"Front": "produce {reading}"}),
+        ),
+    )
+    wire(monkeypatch, fake_anki, profile)
+    app = Flask(__name__)
+    hoshidicts_api.register_hoshidicts_api_routes(app)
+
+    response = app.test_client().get("/api/hoshidicts/mining/options?buttonId=production")
+
+    assert response.status_code == 200
+    options = response.get_json()
+    assert options["buttonId"] == "production"
+    assert options["selectedNoteType"] == "Production"
+    assert options["fields"] == ["Front"]
+    assert options["resolvedFieldTemplates"] == {"Front": {"value": "produce {reading}", "overwriteMode": "coalesce"}}
+
+
+def test_options_route_keeps_the_requested_button_id_when_it_was_removed(monkeypatch):
+    fake_anki = FakeAnki()
+    wire(
+        monkeypatch,
+        fake_anki,
+        make_mining_profile_document(make_anki_button("recognition", label="Recognition")),
+    )
+    app = Flask(__name__)
+    hoshidicts_api.register_hoshidicts_api_routes(app)
+
+    response = app.test_client().get("/api/hoshidicts/mining/options?buttonId=removed")
+
+    assert response.status_code == 200
+    assert response.get_json()["buttonId"] == "removed"
+    assert response.get_json()["error"] == ("This Anki button no longer exists. Reopen the popup and try again.")
+    assert fake_anki.actions() == []
 
 
 def test_options_explicit_automatic_uses_config_model_without_old_legacy_mappings(monkeypatch):
@@ -882,7 +969,324 @@ def test_status_deduplicates_short_lived_ankiconnect_checks(monkeypatch):
     second = hoshidicts_mining.get_hoshidicts_mining_status()
 
     assert first == second
-    assert fake_anki.actions() == ["modelFieldNames", "deckNames"]
+    assert fake_anki.actions() == ["modelNames", "deckNames", "modelFieldNames"]
+
+
+def test_status_reports_each_button_readiness_without_one_invalid_button_hiding_others(monkeypatch):
+    fields_by_model = {
+        "Recognition": ["Word"],
+        "Production": ["Front", "Meaning"],
+    }
+    fake_anki = FakeAnki(
+        model_names=list(fields_by_model),
+        decks=["Recognition deck", "Production deck"],
+        responses={
+            "modelFieldNames": lambda modelName, **_kwargs: fields_by_model[modelName],
+        },
+    )
+    profile = make_mining_profile_document(
+        make_anki_button(
+            "recognition",
+            label="Recognition",
+            deck="Recognition deck",
+            model="Recognition",
+            fieldTemplates=make_field_templates({"Word": "{expression}"}),
+        ),
+        make_anki_button(
+            "missing-deck",
+            label="Missing deck",
+            deck="Archived deck",
+            model="Recognition",
+            fieldTemplates=make_field_templates({"Word": "{expression}"}),
+        ),
+        make_anki_button(
+            "missing-model",
+            label="Missing model",
+            deck="Production deck",
+            model="Renamed model",
+            fieldTemplates=make_field_templates({"Front": "{expression}"}),
+        ),
+        make_anki_button(
+            "missing-field",
+            label="Missing field",
+            deck="Production deck",
+            model="Production",
+            fieldTemplates=make_field_templates({"Front": "{expression}", "Removed": "{definition}"}),
+        ),
+    )
+    wire(monkeypatch, fake_anki, profile)
+
+    status = hoshidicts_mining.get_hoshidicts_mining_status()
+
+    assert status["available"] is True
+    buttons = {button["id"]: button for button in status["buttons"]}
+    assert buttons["recognition"] == {
+        "id": "recognition",
+        "label": "Recognition",
+        "icon": "anki",
+        "enabled": True,
+        "available": True,
+        "deck": "Recognition deck",
+        "model": "Recognition",
+        "fields": {
+            "expression": "Word",
+            "reading": "",
+            "definition": "",
+            "sentence": "",
+            "frequency": "",
+            "pitch": "",
+            "audio": "",
+        },
+        "unmappedFields": [
+            "reading",
+            "definition",
+            "sentence",
+            "frequency",
+            "pitch",
+            "audio",
+        ],
+    }
+    assert buttons["missing-deck"]["available"] is False
+    assert buttons["missing-deck"]["error"] == (
+        'Anki deck "Archived deck" does not exist. Choose another deck in Hoshidicts Settings.'
+    )
+    assert buttons["missing-model"]["available"] is False
+    assert buttons["missing-model"]["error"] == (
+        'Anki note type "Renamed model" does not exist. Choose another note type in Hoshidicts Settings.'
+    )
+    assert buttons["missing-field"]["available"] is False
+    assert buttons["missing-field"]["error"] == (
+        'Anki field "Removed" does not exist in note type "Production". '
+        "Update this button's field mappings in Hoshidicts Settings."
+    )
+
+
+def test_status_reports_unavailable_ankiconnect_per_enabled_button(monkeypatch):
+    fake_anki = FakeAnki(responses={"modelNames": RuntimeError("connection refused")})
+    profile = make_mining_profile_document(
+        make_anki_button("recognition", label="Recognition"),
+        make_anki_button("production", label="Production"),
+        make_anki_button("disabled", label="Disabled", enabled=False),
+    )
+    wire(monkeypatch, fake_anki, profile)
+
+    status = hoshidicts_mining.get_hoshidicts_mining_status()
+
+    assert status["available"] is False
+    buttons = {button["id"]: button for button in status["buttons"]}
+    for button_id in ("recognition", "production"):
+        assert buttons[button_id]["available"] is False
+        assert buttons[button_id]["error"] == ("Could not connect to Anki through GSM: connection refused")
+    assert buttons["disabled"]["available"] is False
+    assert buttons["disabled"]["error"] == "This Anki button is disabled."
+    assert fake_anki.actions() == ["modelNames", "modelNames"]
+
+
+def test_mining_route_attributes_lost_ankiconnect_to_the_selected_button(monkeypatch):
+    fake_anki = FakeAnki(responses={"modelNames": RuntimeError("connection refused")})
+    profile = make_mining_profile_document(make_anki_button("recognition", label="Recognition"))
+    wire(monkeypatch, fake_anki, profile)
+    app = Flask(__name__)
+    hoshidicts_api.register_hoshidicts_api_routes(app)
+
+    response = app.test_client().post(
+        "/api/hoshidicts/mine",
+        json={**make_payload(), "buttonId": "recognition"},
+    )
+
+    assert response.status_code == 502
+    assert response.get_json() == {
+        "success": False,
+        "buttonId": "recognition",
+        "error": "Could not connect to Anki through GSM: connection refused",
+    }
+
+
+def test_status_exposes_global_mining_visibility_without_contacting_anki(monkeypatch):
+    fake_anki = FakeAnki()
+    profile = make_mining_profile_document(
+        make_anki_button("recognition", label="Recognition"),
+        enabled=False,
+    )
+    wire(monkeypatch, fake_anki, profile)
+
+    status = hoshidicts_mining.get_hoshidicts_mining_status()
+
+    assert status["enabled"] is False
+    assert status["available"] is False
+    assert status["error"] == "Hoshidicts mining is disabled."
+    assert status["buttons"] == [
+        {
+            "id": "recognition",
+            "label": "Recognition",
+            "icon": "anki",
+            "enabled": True,
+            "available": False,
+            "error": "Hoshidicts mining is disabled.",
+        }
+    ]
+    assert fake_anki.actions() == []
+
+
+def test_generic_mining_uses_each_selected_buttons_deck_model_and_templates(monkeypatch):
+    fields_by_model = {
+        "Recognition": ["Word", "Meaning"],
+        "Production": ["Front", "Example"],
+    }
+    fake_anki = FakeAnki(
+        model_names=list(fields_by_model),
+        decks=["Recognition deck", "Production deck"],
+        responses={
+            "modelFieldNames": lambda modelName, **_kwargs: fields_by_model[modelName],
+        },
+    )
+    wire(monkeypatch, fake_anki)
+    recognition = {
+        **make_mining_profile(
+            deck="Recognition deck",
+            model="Recognition",
+            fieldTemplates=make_field_templates({"Word": "{expression}", "Meaning": "{definition}"}),
+        ),
+        "id": "recognition",
+        "enabled": True,
+        "label": "Recognition",
+        "icon": "anki",
+    }
+    production = {
+        **make_mining_profile(
+            deck="Production deck",
+            model="Production",
+            fieldTemplates=make_field_templates({"Front": "{reading}", "Example": "{sentence}"}),
+        ),
+        "id": "production",
+        "enabled": True,
+        "label": "Production",
+        "icon": "sparkles",
+    }
+
+    recognition_result = hoshidicts_mining.mine_hoshidicts_note_for_button(
+        recognition,
+        make_payload(),
+    )
+    production_result = hoshidicts_mining.mine_hoshidicts_note_for_button(
+        production,
+        make_payload(),
+    )
+
+    assert recognition_result["buttonId"] == "recognition"
+    assert production_result["buttonId"] == "production"
+    recognition_note, production_note = fake_anki.notes_for("addNote")
+    assert recognition_note["deckName"] == "Recognition deck"
+    assert recognition_note["modelName"] == "Recognition"
+    assert recognition_note["fields"]["Word"] == "食べる"
+    assert "to eat" in recognition_note["fields"]["Meaning"]
+    assert production_note["deckName"] == "Production deck"
+    assert production_note["modelName"] == "Production"
+    assert production_note["fields"] == {
+        "Front": "たべる",
+        "Example": "昨日、<b>食べた</b>。",
+    }
+
+
+def test_mining_request_selects_a_saved_button_by_stable_id(monkeypatch):
+    fake_anki = FakeAnki(
+        fields=["Front"],
+        model_names=["Recognition", "Production"],
+        decks=["Recognition deck", "Production deck"],
+    )
+    recognition = {
+        **make_mining_profile(
+            deck="Recognition deck",
+            model="Recognition",
+            fieldTemplates=make_field_templates({"Front": "recognize {expression}"}),
+        ),
+        "id": "recognition",
+        "enabled": True,
+        "label": "Recognition",
+        "icon": "anki",
+    }
+    production = {
+        **make_mining_profile(
+            deck="Production deck",
+            model="Production",
+            fieldTemplates=make_field_templates({"Front": "produce {reading}"}),
+        ),
+        "id": "production",
+        "enabled": True,
+        "label": "Production",
+        "icon": "sparkles",
+    }
+    wire(monkeypatch, fake_anki, recognition)
+    monkeypatch.setattr(
+        hoshidicts_mining,
+        "load_hoshidicts_mining_profile_document",
+        lambda: {"version": 4, "enabled": True, "buttons": [recognition, production]},
+        raising=False,
+    )
+
+    result = hoshidicts_mining.mine_hoshidicts_note({**make_payload(), "buttonId": "production"})
+
+    assert result["buttonId"] == "production"
+    note = fake_anki.note_for()
+    assert note["deckName"] == "Production deck"
+    assert note["modelName"] == "Production"
+    assert note["fields"] == {"Front": "produce たべる"}
+
+
+def test_duplicate_checks_use_the_selected_buttons_independent_policy(monkeypatch):
+    fields_by_model = {"Recognition": ["Word"], "Production": ["Front"]}
+    fake_anki = FakeAnki(
+        model_names=list(fields_by_model),
+        decks=["Recognition deck", "Production deck"],
+        responses={
+            "modelFieldNames": lambda modelName, **_kwargs: fields_by_model[modelName],
+            "canAddNotesWithErrorDetail": lambda notes, **_kwargs: [
+                {"canAdd": False, "error": DUPLICATE_ERROR} for _note in notes
+            ],
+        },
+    )
+    profile = make_mining_profile_document(
+        make_anki_button(
+            "recognition",
+            label="Recognition",
+            deck="Recognition deck",
+            model="Recognition",
+            fieldTemplates=make_field_templates({"Word": "{expression}"}),
+            duplicateBehavior="prevent",
+        ),
+        make_anki_button(
+            "production",
+            label="Production",
+            deck="Production deck",
+            model="Production",
+            fieldTemplates=make_field_templates({"Front": "{reading}"}),
+            duplicateBehavior="new",
+        ),
+    )
+    wire(monkeypatch, fake_anki, profile)
+
+    recognition = hoshidicts_mining.check_hoshidicts_notes({"buttonId": "recognition", "notes": [make_payload()]})
+    production = hoshidicts_mining.check_hoshidicts_notes({"buttonId": "production", "notes": [make_payload()]})
+
+    assert recognition == {
+        "success": True,
+        "buttonId": "recognition",
+        "checkForDuplicates": True,
+        "duplicateBehavior": "prevent",
+        "results": [{"state": "duplicate", "canAdd": False, "duplicate": True}],
+    }
+    assert production == {
+        "success": True,
+        "buttonId": "production",
+        "checkForDuplicates": True,
+        "duplicateBehavior": "new",
+        "results": [{"state": "duplicate", "canAdd": True, "duplicate": True}],
+    }
+    checked_notes = fake_anki.all_kwargs("canAddNotesWithErrorDetail")
+    assert checked_notes[0]["notes"][0]["deckName"] == "Recognition deck"
+    assert checked_notes[0]["notes"][0]["modelName"] == "Recognition"
+    assert checked_notes[1]["notes"][0]["deckName"] == "Production deck"
+    assert checked_notes[1]["notes"][0]["modelName"] == "Production"
 
 
 def test_mining_preserves_dictionary_metadata_and_queues_gsm_enrichment(monkeypatch):
@@ -1744,6 +2148,61 @@ def test_mining_reports_dictionary_media_storage_failures(monkeypatch, stored_fi
 
     assert error.value.status_code == 502
     assert "addNote" not in fake_anki.actions()
+
+
+def test_mining_route_attributes_media_failure_to_one_button_and_keeps_another_usable(monkeypatch):
+    fake_anki = FakeAnki(
+        fields=["Expression"],
+        responses={"storeMediaFile": ""},
+    )
+    profile = make_mining_profile_document(
+        make_anki_button(
+            "with-media",
+            label="With media",
+            fieldTemplates=make_field_templates({"Expression": "{expression}"}),
+        ),
+        make_anki_button(
+            "without-media",
+            label="Without media",
+            fieldTemplates=make_field_templates({"Expression": "{expression}"}),
+        ),
+    )
+    wire(monkeypatch, fake_anki, profile)
+    app = Flask(__name__)
+    hoshidicts_api.register_hoshidicts_api_routes(app)
+    client = app.test_client()
+
+    failed = client.post(
+        "/api/hoshidicts/mine",
+        json={**_kiku_yomitan_parity_payload(), "buttonId": "with-media"},
+    )
+    succeeded = client.post(
+        "/api/hoshidicts/mine",
+        json={**make_payload(), "buttonId": "without-media"},
+    )
+
+    assert failed.status_code == 502
+    assert failed.get_json() == {
+        "success": False,
+        "buttonId": "with-media",
+        "error": "Anki did not return a stored dictionary media filename.",
+    }
+    assert succeeded.status_code == 200
+    assert succeeded.get_json() == {
+        "success": True,
+        "buttonId": "without-media",
+        "noteId": 42,
+        "unmappedFields": [
+            "reading",
+            "definition",
+            "sentence",
+            "frequency",
+            "pitch",
+            "audio",
+        ],
+        "audio": {"status": "skipped"},
+    }
+    assert fake_anki.actions().count("addNote") == 1
 
 
 def test_sentence_furigana_falls_back_to_safe_highlighted_sentence(monkeypatch):

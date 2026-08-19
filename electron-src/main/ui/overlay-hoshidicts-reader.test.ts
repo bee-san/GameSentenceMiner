@@ -7496,6 +7496,106 @@ describe("Hoshidicts Shift-hover scanner", () => {
     expect(getMiningStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("routes per-button readiness and mining payloads by stable id", async () => {
+    const statusRequest = deferred<Record<string, unknown>>();
+    const checkMiningNotes = vi.fn(async () => ({
+      success: true,
+      buttonId: "production",
+      duplicateBehavior: "prevent",
+      results: [{ state: "addable", canAdd: true, duplicate: false }]
+    }));
+    const mine = vi.fn(async () => ({
+      success: true,
+      buttonId: "production",
+      noteId: 123
+    }));
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: () => statusRequest.promise,
+      onMine: mine
+    });
+    await renderFirstLookup(harness);
+
+    const button = harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-mine-button")!;
+    button.dataset.buttonId = "production";
+    statusRequest.resolve({
+      available: false,
+      error: "The default button is unavailable.",
+      buttons: [
+        {
+          id: "add-to-anki",
+          enabled: true,
+          available: false,
+          error: "The default button is unavailable."
+        },
+        { id: "production", enabled: true, available: true }
+      ]
+    });
+    await flushPromises();
+
+    expect(button.dataset.state).toBe("ready");
+    expect(checkMiningNotes).toHaveBeenCalledWith(expect.objectContaining({
+      buttonId: "production",
+      notes: [expect.any(Object)]
+    }));
+
+    button.click();
+    await flushPromises();
+    expect(mine).toHaveBeenCalledWith(expect.objectContaining({
+      buttonId: "production"
+    }));
+  });
+
+  it("selects the default stable id for the legacy popup mining button", async () => {
+    const checkMiningNotes = vi.fn(async () => ({
+      success: true,
+      buttonId: "add-to-anki",
+      duplicateBehavior: "prevent",
+      results: [{ state: "addable", canAdd: true, duplicate: false }]
+    }));
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [
+          { id: "recognition", enabled: true, available: true },
+          { id: "add-to-anki", enabled: true, available: true }
+        ]
+      }),
+      onMine: vi.fn()
+    });
+
+    await renderFirstLookup(harness);
+
+    const button = harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-mine-button")!;
+    expect(button.dataset.buttonId).toBe("add-to-anki");
+    expect(checkMiningNotes).toHaveBeenCalledWith(expect.objectContaining({
+      buttonId: "add-to-anki"
+    }));
+  });
+
+  it("rejects malformed per-button readiness instead of using legacy routing", async () => {
+    const checkMiningNotes = vi.fn();
+    const harness = createReaderHarness({
+      checkMiningNotes,
+      getMiningStatus: async () => ({
+        available: true,
+        buttons: [{ id: "invalid button id", enabled: true, available: true }]
+      }),
+      onMine: vi.fn()
+    });
+
+    await renderFirstLookup(harness);
+
+    const button = harness.reader.getPopupElement()
+      .querySelector<HTMLButtonElement>(".gsm-hoshidicts-mine-button")!;
+    expect(button.dataset.state).toBe("unavailable");
+    expect(button.hidden).toBe(true);
+    expect(checkMiningNotes).not.toHaveBeenCalled();
+  });
+
   it("disables an existing note when duplicate prevention is enabled", async () => {
     const checkMiningNotes = vi.fn(async (payload) => ({
       success: true,
