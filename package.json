@@ -133,7 +133,7 @@
     "concurrently": "^10.0.4",
     "cross-env": "^10.0.0",
     "daisyui": "^5.7.4",
-    "electron": "^43.2.0",
+    "electron": "^43.6.0",
     "electron-builder": "^26.15.3",
     "jsdom": "^30.0.0",
     "nodemon": "^3.1.14",
