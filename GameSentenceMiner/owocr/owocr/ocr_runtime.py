@@ -85,7 +85,7 @@ USE_MOCK_OCR = False
 # Experimental OCR1 gate. The first two visually stable frames still reach the
 # local engine so the existing two-pass controller can confirm a line; later
 # stable frames are skipped until the text crop changes.
-USE_OCR_IMAGE_STABILITY_GATE = True
+USE_OCR_IMAGE_STABILITY_GATE = False
 OCR_IMAGE_STABILITY_THRESHOLD = 0.985
 OCR_IMAGE_STABILITY_REQUIRED_OCR_CALLS = 2
 
