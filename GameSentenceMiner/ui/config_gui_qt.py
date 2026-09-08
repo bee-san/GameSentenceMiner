@@ -1,6 +1,7 @@
 import ctypes
 import PyQt6.QtGui as QTGui
 import copy
+from dataclasses import replace
 import os
 import requests
 import subprocess
@@ -104,7 +105,6 @@ from GameSentenceMiner.util.config.configuration import (
     OBS,
     Hotkeys,
     VAD,
-    Overlay,
     Ai,
     Advanced,
     OverlayEngine,
@@ -1095,8 +1095,10 @@ class ConfigWindow(QWidget):
                     custom_texthooker_prompt=self.custom_texthooker_prompt_textedit.toPlainText(),
                     custom_full_prompt=self.custom_full_prompt_textedit.toPlainText(),
                 ),
-                overlay=Overlay(
-                    websocket_port=self.settings.overlay.websocket_port,
+                # Preserve fields managed only by the overlay UI, including edits
+                # made after this settings window loaded its own config snapshot.
+                overlay=replace(
+                    configuration.get_overlay_config(),
                     monitor_to_capture=selected_monitor_index,
                     monitor_to_capture_id=str(selected_monitor_descriptor.get("id", "")),
                     monitor_to_capture_bounds=dict(selected_monitor_descriptor.get("bounds", {})),
@@ -1120,9 +1122,6 @@ class ConfigWindow(QWidget):
                         OverlayManualBackgroundMode.ON_DEMAND.value
                         if self.manual_mode_desktop_background_check.isChecked()
                         else OverlayManualBackgroundMode.OFF.value
-                    ),
-                    check_previous_lines_for_recycled_indicator=bool(
-                        getattr(self.settings.overlay, "check_previous_lines_for_recycled_indicator", False)
                     ),
                     ocr_full_screen_instead_of_obs=bool(
                         getattr(self, "ocr_full_screen_instead_of_obs_checkbox", None)

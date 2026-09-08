@@ -4,6 +4,19 @@ from GameSentenceMiner import gametext
 from GameSentenceMiner.web import texthooking_page
 
 
+def test_single_port_gateway_falls_back_when_aiohttp_cannot_initialize(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        texthooking_page,
+        "_AIOHTTP_IMPORT_ERROR",
+        RuntimeError("SSLContext initialization failed"),
+    )
+    monkeypatch.setattr(texthooking_page.logger, "warning", warnings.append)
+
+    assert texthooking_page._try_start_single_port_gateway("127.0.0.1", 7275) is False
+    assert any("falling back to Waitress" in message for message in warnings)
+
+
 def test_root_redirects_to_texthooker():
     response = texthooking_page.app.test_client().get("/")
 

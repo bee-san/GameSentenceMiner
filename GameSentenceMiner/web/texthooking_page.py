@@ -39,6 +39,25 @@ from GameSentenceMiner.web.gsm_websocket import (
 )
 from GameSentenceMiner.web.websocket_proxy import build_upstream_websocket_headers
 
+# aiohttp creates its process-wide default SSLContext objects while importing
+# ``aiohttp.connector``.  python-build-standalone has a known OpenSSL issue on
+# some Linux distributions when that import happens for the first time inside
+# a worker thread.  This module is imported by GSM's main thread before the
+# texthooker thread is started, so load the optional gateway dependency here.
+# If the runtime's OpenSSL configuration is incompatible, keep that failure
+# contained and let the normal Waitress listener continue below.
+try:
+    from aiohttp import ClientSession, ClientTimeout, TCPConnector, WSMsgType, web
+
+    _AIOHTTP_IMPORT_ERROR = None
+except Exception as error:  # pragma: no cover - depends on the host OpenSSL build  # noqa: BLE001
+    ClientSession = None
+    ClientTimeout = None
+    TCPConnector = None
+    WSMsgType = None
+    web = None
+    _AIOHTTP_IMPORT_ERROR = error
+
 server_start_time = datetime.datetime.now().timestamp()
 _legacy_notice_server = None
 _legacy_notice_thread = None
@@ -192,10 +211,11 @@ def _try_start_single_port_gateway(host: str, external_port: int) -> bool:
       - Expose one public port that reverse-proxies HTTP + websocket paths.
     """
     global _single_port_gateway_active, _single_port_gateway_port, _single_port_gateway_future
-    try:
-        from aiohttp import ClientSession, ClientTimeout, TCPConnector, WSMsgType, web
-    except ImportError:
-        logger.warning("Single-port mode requested, but 'aiohttp' is not installed. Install with: pip install aiohttp")
+    if _AIOHTTP_IMPORT_ERROR is not None:
+        logger.warning(
+            "Single-port gateway unavailable because aiohttp could not initialize "
+            f"(falling back to Waitress): {_AIOHTTP_IMPORT_ERROR}"
+        )
         return False
 
     internal_http_port = _find_free_port(host)
