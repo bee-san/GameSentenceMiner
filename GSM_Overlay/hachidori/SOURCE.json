@@ -1,0 +1,10 @@
+{
+  "name": "Hachidori",
+  "repository": "https://github.com/bee-san/hachidori",
+  "commit": "c860fa773b0c32788a9b42fdc979acb948f2777d",
+  "sourceDirectory": "extension",
+  "license": "GPL-3.0-or-later",
+  "modifications": [
+    "manifest.json includes a fixed public key so the GSM-hosted extension keeps one stable ID."
+  ]
+}
