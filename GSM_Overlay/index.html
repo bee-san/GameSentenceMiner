@@ -1777,6 +1777,20 @@ background: rgba(202, 12, 12, 0.692);
   const MAX_FURIGANA_LINE_CACHE_ENTRIES = 200;
   let lastFuriganaRenderSignature = null;
   const furiganaLineCache = new Map();
+  let jitenFuriganaFrameTimer = null;
+  let releaseJitenFuriganaFrame = null;
+  let jitenFuriganaFrameSignature = null;
+  let jitenFuriganaFrameReady = null;
+
+  function cancelPendingJitenFuriganaFrame() {
+    clearTimeout(jitenFuriganaFrameTimer);
+    jitenFuriganaFrameTimer = null;
+    if (releaseJitenFuriganaFrame) releaseJitenFuriganaFrame(false);
+    releaseJitenFuriganaFrame = null;
+    jitenFuriganaFrameSignature = null;
+    jitenFuriganaFrameReady = null;
+    ipcRenderer.send('gsm-jiten-cancel-frame');
+  }
   // Jiten SRS Highlighting state (mirror approach)
   let jitenHighlightingEnabled = true;
   // Most recent OCR lines, kept even while highlighting is off so toggling on can
@@ -2369,6 +2383,10 @@ background: rgba(202, 12, 12, 0.692);
   }
 
   async function handleJitenGradeRequest(data, source) {
+    const trace = (stage) => {
+      try { ipcRenderer.sendSync('gsm-jiten-grade-stage', stage); } catch (_) { /* optional diagnostic bridge */ }
+    };
+    trace('received');
     const requestId = data.requestId;
     const reply = (payload) => {
       if (!source || typeof source.postMessage !== 'function') return;
@@ -2377,11 +2395,15 @@ background: rgba(202, 12, 12, 0.692);
     try {
       const apiKey = getJitenGradingApiKey();
       if (!apiKey) { reply({ ok: false, error: 'JitenAPI key is not set' }); return; }
+      trace('resolving');
       const ref = await resolveJitenWordRef(data.term, data.reading);
+      trace('resolved');
       if (!ref) { reply({ ok: false, error: 'Could not resolve word in Jiten' }); return; }
       const endpoint = JITEN_GRADING_PARSE_URL;
+      trace('writing');
       if (data.kind === 'review') {
         await ipcRenderer.invoke('gsm-jiten-review', {
+          requestId,
           wordId: ref.wordId, readingIndex: ref.readingIndex, rating: Number(data.rating),
           apiKey, endpoint, timeout: 5000,
         });
@@ -2390,17 +2412,24 @@ background: rgba(202, 12, 12, 0.692);
         const action = String(data.action || 'add');
         if (!deck) { reply({ ok: false, error: 'Missing deck' }); return; }
         await ipcRenderer.invoke('gsm-jiten-set-vocabulary-state', {
+          requestId,
           wordId: ref.wordId, readingIndex: ref.readingIndex, state: `${deck}-${action}`,
           apiKey, endpoint, timeout: 5000,
         });
       } else {
         reply({ ok: false, error: 'Unknown grade kind' }); return;
       }
+      trace('written');
+      trace('replying');
       reply({ ok: true, wordId: ref.wordId, readingIndex: ref.readingIndex });
+      trace('replied');
       // Optimistic highlight update — no extra API call needed. We know the target
       // state from the grade action itself.
+      trace('highlighting');
       applyOptimisticHighlightState(ref.wordId, ref.readingIndex, data.kind, Number(data.rating), data.deck);
+      trace('highlighted');
     } catch (e) {
+      trace('failed');
       reply({ ok: false, error: String((e && e.message) || e) });
     }
   }
@@ -4060,6 +4089,7 @@ background: rgba(202, 12, 12, 0.692);
     }
 
     if (!showFurigana) {
+      cancelPendingJitenFuriganaFrame();
       resetFuriganaRenderState();
       return;
     }
@@ -4087,13 +4117,49 @@ background: rgba(202, 12, 12, 0.692);
       }
     }
 
+    const usesJiten = !usesLocalReadings && gamepadHandler.isUsingJitenApi();
+    if (usesJiten) {
+      // Wait briefly for OCR to settle. Every newer frame replaces the pending
+      // timer, and the backend also drops obsolete work already in its queue.
+      const signature = JSON.stringify(lines.map((line) => line?.text || ''));
+      if (signature !== jitenFuriganaFrameSignature) {
+        clearTimeout(jitenFuriganaFrameTimer);
+        if (releaseJitenFuriganaFrame) releaseJitenFuriganaFrame(false);
+        jitenFuriganaFrameSignature = signature;
+        jitenFuriganaFrameReady = new Promise((resolve) => {
+          releaseJitenFuriganaFrame = resolve;
+          jitenFuriganaFrameTimer = setTimeout(() => {
+            releaseJitenFuriganaFrame = null;
+            jitenFuriganaFrameTimer = null;
+            resolve(true);
+          }, 250);
+        });
+      }
+      const ready = await jitenFuriganaFrameReady;
+      if (!ready || renderGeneration !== overlayRenderGeneration || !showFurigana) return;
+    } else {
+      cancelPendingJitenFuriganaFrame();
+    }
+
+    let jitenResults = null;
+    if (usesJiten) {
+      jitenResults = await gamepadHandler.requestJitenFuriganaFrame(
+        lines.map((line) => ({ text: line?.text || '' })),
+        () => renderGeneration === overlayRenderGeneration && showFurigana
+      );
+      if (renderGeneration !== overlayRenderGeneration || !showFurigana) return;
+    }
+
     const furiganaRequests = lines.map((line, lineIdx) => {
-      if (!line || !line.text || !/[^\u0000-\u007F]/.test(line.text)) {
+      if (!line || !line.text || (!usesLocalReadings && !window.GSMFuriganaUtils.textContainsJapanese(line.text))) {
         return Promise.resolve(null);
       }
       if (usesLocalReadings) {
         // Annotations are derived from line.text directly; segments unused.
         return Promise.resolve({ line, lineIdx, segments: [] });
+      }
+      if (jitenResults) {
+        return Promise.resolve({ line, lineIdx, segments: jitenResults[lineIdx]?.segments || [] });
       }
       const cachedLine = getCachedFuriganaLine(line.text);
       if (cachedLine) {
@@ -4238,6 +4304,7 @@ background: rgba(202, 12, 12, 0.692);
         }
     });
     if (!preserveFurigana) {
+      cancelPendingJitenFuriganaFrame();
       resetFuriganaRenderState();
     }
     
@@ -4252,6 +4319,7 @@ background: rgba(202, 12, 12, 0.692);
   }
 
   function invalidateStaleOcrOverlayText(options = {}) {
+    cancelPendingJitenFuriganaFrame();
     const removeNotation = options.removeNotation === true;
     const invalidateLookups = options.invalidateLookups === true;
     overlayRenderGeneration += 1;
@@ -4801,6 +4869,7 @@ background: rgba(202, 12, 12, 0.692);
         case "showFurigana":
           showFurigana = value;
           if (!showFurigana) {
+            cancelPendingJitenFuriganaFrame();
             clearFuriganaAutoHideTimer();
             furiganaAutoHidden = false;
           }

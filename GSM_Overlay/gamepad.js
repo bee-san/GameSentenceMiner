@@ -1847,10 +1847,6 @@ class GamepadHandler {
   }
 
   async requestJitenParse(text, timeout = null) {
-    if (typeof fetch !== 'function') {
-      throw new Error('Fetch API unavailable in renderer context');
-    }
-
     const apiKey = this.getJitenApiKey();
     if (!apiKey) {
       throw new Error('JitenAPI key is missing');
@@ -1860,8 +1856,7 @@ class GamepadHandler {
     const safeTimeout = Math.max(400, Math.min(20000, Number(requestTimeout) || 2200));
     const endpoint = this.getJitenApiEndpoint();
 
-    // Prefer the main-process cache (shared with the Jiten Reader extension).
-    // Falls back to a direct fetch if the IPC bridge is unavailable.
+    // All Jiten traffic must pass through the shared main-process broker.
     const ipc = (typeof window !== 'undefined') ? window.ipcRenderer : null;
     if (ipc && typeof ipc.invoke === 'function') {
       try {
@@ -1879,41 +1874,50 @@ class GamepadHandler {
       }
     }
 
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    let timeoutId = null;
-    if (controller) {
-      timeoutId = setTimeout(() => controller.abort(), safeTimeout);
-    }
+    this.jitenApiReachable = false;
+    throw new Error('Jiten request broker is unavailable');
+  }
 
+  async requestJitenFuriganaFrame(lines, isCurrent = () => true) {
+    const ipc = typeof window !== 'undefined' ? window.ipcRenderer : null;
+    const apiKey = this.getJitenApiKey();
+    const endpoint = this.getJitenApiEndpoint();
+    const stillCurrent = () => isCurrent() && this.isUsingJitenApi() && this.getJitenApiKey() === apiKey && this.getJitenApiEndpoint() === endpoint;
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'accept': '*/*',
-          'Content-Type': 'application/json',
-          'X-Api-Key': apiKey,
-          ...this.getApiClientHeaders(),
-        },
-        body: JSON.stringify({
-          text: [text],
-        }),
-        signal: controller ? controller.signal : undefined,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      if (!ipc?.invoke) throw new Error('Jiten request broker is unavailable');
+      const texts = lines.map((line) => line.text);
+      const signature = JSON.stringify([apiKey, endpoint, texts]);
+      let frame = this._jitenFuriganaFrame;
+      if (!frame || frame.signature !== signature || frame.expiresAt <= Date.now()) {
+        frame = { signature, expiresAt: Date.now() + 1_800_000 };
+        frame.promise = ipc.invoke('gsm-jiten-parse-frame', { texts, apiKey, endpoint }).catch((err) => {
+          if (this._jitenFuriganaFrame === frame) this._jitenFuriganaFrame = null;
+          throw err;
+        });
+        this._jitenFuriganaFrame = frame;
       }
-
-      const payload = await response.json();
+      // Geometry-only rerenders share both pending and completed readings.
+      const payload = await frame.promise;
+      if (!stillCurrent()) return [];
       this.jitenApiReachable = true;
-      return payload;
-    } catch (error) {
+      return lines.map((line, i) => ({
+        segments: this.normalizeFuriganaSegments(this.convertJitenPayloadToFuriganaSegments({
+          tokens: [payload.tokens[i]], vocabulary: payload.vocabulary,
+        }, line.text), line.text, 'jiten-api'),
+      }));
+    } catch (err) {
+      if (!stillCurrent()) return [];
       this.jitenApiReachable = false;
-      throw error;
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      // Respect the existing fallback configuration, without issuing another
+      // Jiten request for every line after a batch fails or is rate-limited.
+      return Promise.all(lines.map(async (line, i) => {
+        for (const backend of this.getBackendAttemptOrder().filter((name) => name !== 'jiten-api')) {
+          if (!stillCurrent()) return { segments: [] };
+          try { return await this.requestFuriganaWithBackend(backend, line.text, i, 1200); }
+          catch (_) { /* try the next configured local fallback */ }
+        }
+        return this.buildFallbackFuriganaResponse(line.text, i);
+      }));
     }
   }
 

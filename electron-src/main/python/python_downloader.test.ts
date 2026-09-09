@@ -252,14 +252,14 @@ describe('getOrInstallPython', () => {
         existingPaths.add(VENV_DIR);
         existingPaths.add(path.dirname(PYTHON_PATH));
         existingPaths.add(PYTHON_PATH);
-        fileContents.set(path.join(VENV_DIR, '.gsm_venv_generation'), '2:3.13.2\n');
+        fileContents.set(path.join(VENV_DIR, '.gsm_venv_generation'), '1:3.13.2\n');
 
         const { getOrInstallPython } = await import('./python_downloader.js');
 
         await expect(getOrInstallPython()).resolves.toBe(PYTHON_PATH);
 
         expect(fsMock.rmSync).toHaveBeenCalledWith(VENV_DIR, { recursive: true, force: true });
-        expect(fileContents.get(path.join(VENV_DIR, '.gsm_venv_generation'))).toBe('3:3.13.2\n');
+        expect(fileContents.get(path.join(VENV_DIR, '.gsm_venv_generation'))).toBe('2:3.13.2\n');
     });
 
     it('reinstalls a cached uv binary when its version does not match the runtime lock tool', async () => {
