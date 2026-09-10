@@ -66,6 +66,13 @@ async function main() {
     path.join(overlayResourcesDir, serverExecutableName),
     path.join(overlayResourcesDir, 'mecab_bridge.py'),
     path.join(overlayResourcesDir, 'yomitan', 'manifest.json'),
+    path.join(overlayResourcesDir, 'hachidori', 'manifest.json'),
+    path.join(overlayResourcesDir, 'hachidori', 'background.js'),
+    path.join(overlayResourcesDir, 'hachidori', 'offscreen.js'),
+    path.join(overlayResourcesDir, 'hachidori', 'vendor', 'hoshidicts.wasm'),
+    path.join(overlayResourcesDir, 'hachidori', 'vendor', 'hoshidicts-threaded.wasm'),
+    path.join(overlayResourcesDir, 'hachidori', 'LICENSE.hachidori'),
+    path.join(overlayResourcesDir, 'hachidori', 'SOURCE.json'),
   ];
 
   const missing = [];
@@ -77,6 +84,20 @@ async function main() {
 
   if (missing.length > 0) {
     throw new Error(`Packaged overlay is incomplete. Missing:\n${missing.map((item) => `  - ${item}`).join('\n')}`);
+  }
+
+  const hachidoriManifest = JSON.parse(
+    await fs.readFile(path.join(overlayResourcesDir, 'hachidori', 'manifest.json'), 'utf8')
+  );
+  if (typeof hachidoriManifest.key !== 'string' || hachidoriManifest.key.length === 0) {
+    throw new Error('Packaged Hachidori manifest does not contain its stable extension key.');
+  }
+
+  const hachidoriSource = JSON.parse(
+    await fs.readFile(path.join(overlayResourcesDir, 'hachidori', 'SOURCE.json'), 'utf8')
+  );
+  if (!/^[0-9a-f]{40}$/.test(hachidoriSource.commit || '')) {
+    throw new Error('Packaged Hachidori SOURCE.json does not identify an exact source commit.');
   }
 
   console.log(`[verify-overlay-package] Verified ${overlayResourcesDir}`);

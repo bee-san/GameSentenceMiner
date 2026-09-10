@@ -1381,9 +1381,9 @@
     <div class="docs-banner">
       <div class="docs-banner-links">
         <button type="button" class="docs-link-chip yomitan-settings-chip" id="openYomitanSettings"
-          title="Open Yomitan dictionary settings">
+          title="Open dictionary settings">
           <img src="yomitan/images/icon19.png" alt="">
-          Yomitan Settings
+          Dictionary Settings
         </button>
         <button type="button" class="docs-link-chip" data-doc-key="overlay">
           Overlay Guide
@@ -1424,6 +1424,20 @@
     </div>
 
     <div class="settings-grid">
+    <div class="setting-group full-width" data-tab="overview">
+      <h4>Dictionary reader</h4>
+      <label>
+        <span class="label-text">Reader</span>
+        <select id="dictionaryReader">
+          <option value="yomitan">Yomitan</option>
+          <option value="hachidori">Hachidori (experimental)</option>
+        </select>
+      </label>
+      <div class="hotkey-info">
+        Restart the overlay after changing readers. Hachidori supports hover lookup, pronunciation,
+        dictionary import, and its own Anki mining; browser-only capture, backup, and scheduling features may not work.
+      </div>
+    </div>
     <div class="setting-group full-width" data-tab="overview">
       <h4>What the overlay can do</h4>
       <p class="presets-intro">
@@ -3080,6 +3094,7 @@
     const VALID_LIVE_STATS_DISPLAY_MODES = new Set(["always", "new-line"]);
     const VALID_LIVE_STATS_LAYOUTS = new Set(["stacked", "one-line"]);
     const VALID_LIVE_STATS_POSITION_MODES = new Set(["active-window", "overlay"]);
+    const VALID_DICTIONARY_READERS = new Set(["yomitan", "hachidori"]);
     const LIVE_STATS_FIELD_DEFINITIONS = [
       { key: "chars_per_hour", controlId: "liveStatsFieldCharsPerHour" },
       { key: "total_characters", controlId: "liveStatsFieldTotalCharacters" },
@@ -3119,6 +3134,11 @@
         .trim()
         .toLowerCase()
         .replace(/\s+/g, "");
+    }
+
+    function normalizeDictionaryReaderValue(value) {
+      const normalized = String(value || "").trim().toLowerCase();
+      return VALID_DICTIONARY_READERS.has(normalized) ? normalized : "yomitan";
     }
 
     function normalizeTokenizerBackendValue(value) {
@@ -3689,6 +3709,9 @@
     // Latest GSM-owned monitor index; used to restore selection once the dropdown is populated.
     let desiredMonitorToCapture = 0;
     const SETTING_BINDING_DEFINITIONS = [
+      createSelectBinding("dictionaryReader", "#dictionaryReader", {
+        normalize: normalizeDictionaryReaderValue,
+      }),
       createCheckboxBinding("showReadyIndicator", "#showReadyIndicator"),
       createCheckboxBinding("showTextIndicators", "#showTextIndicators", {
         afterApply: () => updateFadeTextIndicatorsState(),
@@ -4861,6 +4884,7 @@
     function buildResolvedUserSettings(userSettings = {}) {
       return {
         ...userSettings,
+        dictionaryReader: normalizeDictionaryReaderValue(userSettings.dictionaryReader),
         showTextIndicators: userSettings.showTextIndicators !== undefined
           ? userSettings.showTextIndicators !== false
           : true,

@@ -38,6 +38,10 @@ const {
   isWaylandSession,
 } = require('./hotkey_routing');
 const { shouldRevealAutomaticOverlay, shouldShowOverlayOnReady } = require('./automatic_visibility');
+const {
+  DICTIONARY_READER_YOMITAN,
+  normalizeDictionaryReader,
+} = require('./dictionary_reader');
 const { URL } = require('url');
 
 const IN_PROCESS_OVERLAY = process.env.GSM_OVERLAY_IN_PROCESS === '1';
@@ -343,6 +347,7 @@ const OVERLAY_NON_PROFILE_SETTING_KEYS = new Set([
   "gamepadJitenApiKey",
   "gamepadJpdbApiKey",
   "gamepadYomitanApiUrl",
+  "dictionaryReader",
 ]);
 
 function getPackagedResourcesPath() {
@@ -742,6 +747,8 @@ let lastManualActivity = Date.now();
 let activityTimer = null;
 let isDev = false;
 let yomitanExt;
+let hachidoriExt;
+let hachidoriEngineWindow = null;
 let jitenReaderExt;
 
 // Chromium's session.fetch can terminate the standalone Electron process on
@@ -943,6 +950,7 @@ const DEFAULT_USER_SETTINGS = Object.freeze({
   "hideOverlayOnStartup": false,
   "hideOnStartup": true,
   "openSettingsOnStartup": true,
+  "dictionaryReader": DICTIONARY_READER_YOMITAN,
   "focusOverlayOnYomitanLookup": false,
   "manualMode": false,
   "manualModeType": "hold",
@@ -3410,6 +3418,46 @@ async function loadExtension(name) {
   }
 }
 
+async function createHachidoriEngineWindow() {
+  if (!hachidoriExt) {
+    return false;
+  }
+  if (hachidoriEngineWindow && !hachidoriEngineWindow.isDestroyed()) {
+    return true;
+  }
+
+  const engineWindow = new BrowserWindow({
+    show: false,
+    width: 1,
+    height: 1,
+    skipTaskbar: true,
+    webPreferences: {
+      session: getOverlaySession(),
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+    },
+  });
+  hachidoriEngineWindow = engineWindow;
+  engineWindow.on('closed', () => {
+    if (hachidoriEngineWindow === engineWindow) {
+      hachidoriEngineWindow = null;
+    }
+  });
+
+  try {
+    await engineWindow.loadURL(`chrome-extension://${hachidoriExt.id}/offscreen.html`);
+    console.log(`[Hachidori] Hosted dictionary engine ready (${hachidoriExt.id}).`);
+    return true;
+  } catch (error) {
+    console.error('[Hachidori] Failed to host offscreen.html:', error);
+    if (!engineWindow.isDestroyed()) {
+      engineWindow.destroy();
+    }
+    return false;
+  }
+}
+
 function readExtensionVersions() {
   if (!fs.existsSync(extensionVersionsPath)) {
     return {};
@@ -4385,6 +4433,12 @@ if (INPUT_SERVER_MANAGED_BY_GSM && userSettings.gamepadServerPort !== MANAGED_IN
   shouldPersistOverlaySettings = true;
 }
 
+const normalizedDictionaryReader = normalizeDictionaryReader(userSettings.dictionaryReader);
+const dictionaryReaderNormalized = normalizedDictionaryReader !== userSettings.dictionaryReader;
+if (dictionaryReaderNormalized) {
+  userSettings.dictionaryReader = normalizedDictionaryReader;
+}
+
 const websocketEndpointsNormalized = enforceOverlayWebSocketUrls(userSettings);
 const texthookerUrlNormalized = enforceTexthookerUrl(userSettings);
 const furiganaSettingsNormalized = normalizeFuriganaSettings(userSettings);
@@ -4406,6 +4460,7 @@ const normalizedHotkeySettingKeys = normalizeOverlayHotkeySettings(userSettings)
 const hotkeyConflictResolvedOnLoad = ensureManualAndTexthookerHotkeysDistinct("settings-load");
 const gsmOwnedSettingsNormalized = syncGsmOwnedOverlaySettingsFromGSM("settings-load");
 if (
+  dictionaryReaderNormalized ||
   websocketEndpointsNormalized ||
   texthookerUrlNormalized ||
   furiganaSettingsNormalized ||
@@ -5936,6 +5991,11 @@ function openYomitanSettings() {
     yomitanSettingsWindow.focus();
     return;
   }
+  const dictionaryExtension = hachidoriExt || yomitanExt;
+  if (!dictionaryExtension) {
+    dialog.showErrorBox('Error', 'The selected dictionary reader is not loaded. Restart the overlay and try again.');
+    return;
+  }
   yomitanSettingsWindow = new BrowserWindow({
     width: 1100,
     height: 800,
@@ -5954,7 +6014,7 @@ function openYomitanSettings() {
   });
 
   yomitanSettingsWindow.removeMenu()
-  yomitanSettingsWindow.loadURL(`chrome-extension://${yomitanExt.id}/settings.html`);
+  yomitanSettingsWindow.loadURL(`chrome-extension://${dictionaryExtension.id}/settings.html`);
   yomitanSettingsWindow.show();
   // Force a repaint to fix blank/transparent window issue
   setTimeout(() => {
@@ -6490,6 +6550,7 @@ async function startOverlayAppImpl() {
   // ===========================================================
 
   isDev = !app.isPackaged;
+  const dictionaryReader = normalizeDictionaryReader(userSettings.dictionaryReader);
   const extDir = isDev ? path.join(__dirname, 'yomitan') : path.join(getPackagedResourcesPath(), "yomitan");
 
   // 1. Define Paths
@@ -6505,7 +6566,7 @@ async function startOverlayAppImpl() {
   const skipMigrationConfirmationInLinux = true;
 
   // DO LINUX FIRST, and then windows later if we need it...
-  if (isLinux()) {
+  if (dictionaryReader === DICTIONARY_READER_YOMITAN && isLinux()) {
     if (skipMigrationConfirmationInLinux) {
       try {
         if (!fs.existsSync(staticManifestPath)) {
@@ -6634,7 +6695,7 @@ async function startOverlayAppImpl() {
 
   // Detect if yomitan extension files changed since last overlay launch (e.g. GSM app update).
   // If so, clear Chromium's cached service workers to prevent stale compiled background scripts.
-  {
+  if (dictionaryReader === DICTIONARY_READER_YOMITAN) {
     const yomitanExtDir = isDev ? path.join(__dirname, 'yomitan') : path.join(getPackagedResourcesPath(), 'yomitan');
     const yomitanManifestPath = path.join(yomitanExtDir, 'manifest.json');
     const yomitanMtimePath = path.join(dataPath, 'yomitan_last_mtime.json');
@@ -6662,6 +6723,11 @@ async function startOverlayAppImpl() {
     try {
       fs.writeFileSync(yomitanMtimePath, JSON.stringify({ mtime: currentMtime }));
     } catch {}
+  } else {
+    hachidoriExt = await loadExtension('hachidori');
+    if (hachidoriExt) {
+      await createHachidoriEngineWindow();
+    }
   }
 
   if (userSettings.enableJitenReader) {
@@ -6669,7 +6735,7 @@ async function startOverlayAppImpl() {
   }
 
   // If migration marker exists, update it with the actual ID for debugging
-  if (fs.existsSync(markerPath)) {
+  if (dictionaryReader === DICTIONARY_READER_YOMITAN && fs.existsSync(markerPath)) {
     const markerData = JSON.parse(fs.readFileSync(markerPath, 'utf-8'));
     if (!markerData.id && yomitanExt) {
       markerData.id = yomitanExt.id;
@@ -6678,7 +6744,7 @@ async function startOverlayAppImpl() {
   }
 
   // Watch yomitan extension directory for rebuilds and hot-reload on change (dev workflow)
-  {
+  if (dictionaryReader === DICTIONARY_READER_YOMITAN) {
     const yomitanExtDir = isDev ? path.join(__dirname, 'yomitan') : path.join(getPackagedResourcesPath(), 'yomitan');
     const yomitanManifestPath = path.join(yomitanExtDir, 'manifest.json');
     const yomitanMtimePath = path.join(dataPath, 'yomitan_last_mtime.json');
@@ -7676,6 +7742,8 @@ async function startOverlayAppImpl() {
     }
     if (key === "showRecycledIndicator") {
       value = value === true;
+    } else if (key === "dictionaryReader") {
+      value = normalizeDictionaryReader(value);
     } else if (key === "fontSize") {
       value = normalizeFloatingWindowFontSize(value);
     } else if (key === "gamepadServerPort" && INPUT_SERVER_MANAGED_BY_GSM) {
@@ -8374,13 +8442,14 @@ async function stopOverlayApp() {
       fullscreenModeRecommendationWindow = null;
       settingsWindow = null;
       yomitanSettingsWindow = null;
+      hachidoriEngineWindow = null;
       jitenReaderSettingsWindow = null;
       offsetHelperWindow = null;
       texthookerWindow = null;
 
       runOverlayCleanupStep('extensions', () => {
         const extensionApi = getExtensionSessionApi();
-        for (const extension of [yomitanExt, jitenReaderExt]) {
+        for (const extension of [yomitanExt, hachidoriExt, jitenReaderExt]) {
           if (extension && extension.id) {
             try {
               extensionApi.removeExtension(extension.id);
@@ -8391,6 +8460,7 @@ async function stopOverlayApp() {
         }
       });
       yomitanExt = null;
+      hachidoriExt = null;
       jitenReaderExt = null;
 
       runOverlayCleanupStep('IPC registrations', () => removeOverlayIpcRegistrations());
