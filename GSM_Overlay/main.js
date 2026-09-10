@@ -40,7 +40,7 @@ const {
 const { shouldRevealAutomaticOverlay, shouldShowOverlayOnReady } = require('./automatic_visibility');
 const {
   DICTIONARY_READER_YOMITAN,
-  normalizeDictionaryReader,
+  resolveDictionaryReaderFromConfigData,
 } = require('./dictionary_reader');
 const { URL } = require('url');
 
@@ -347,7 +347,6 @@ const OVERLAY_NON_PROFILE_SETTING_KEYS = new Set([
   "gamepadJitenApiKey",
   "gamepadJpdbApiKey",
   "gamepadYomitanApiUrl",
-  "dictionaryReader",
 ]);
 
 function getPackagedResourcesPath() {
@@ -951,7 +950,6 @@ const DEFAULT_USER_SETTINGS = Object.freeze({
   "hideOverlayOnStartup": false,
   "hideOnStartup": true,
   "openSettingsOnStartup": true,
-  "dictionaryReader": DICTIONARY_READER_YOMITAN,
   "focusOverlayOnYomitanLookup": false,
   "manualMode": false,
   "manualModeType": "hold",
@@ -4464,12 +4462,6 @@ if (INPUT_SERVER_MANAGED_BY_GSM && userSettings.gamepadServerPort !== MANAGED_IN
   shouldPersistOverlaySettings = true;
 }
 
-const normalizedDictionaryReader = normalizeDictionaryReader(userSettings.dictionaryReader);
-const dictionaryReaderNormalized = normalizedDictionaryReader !== userSettings.dictionaryReader;
-if (dictionaryReaderNormalized) {
-  userSettings.dictionaryReader = normalizedDictionaryReader;
-}
-
 const websocketEndpointsNormalized = enforceOverlayWebSocketUrls(userSettings);
 const texthookerUrlNormalized = enforceTexthookerUrl(userSettings);
 const furiganaSettingsNormalized = normalizeFuriganaSettings(userSettings);
@@ -4491,7 +4483,6 @@ const normalizedHotkeySettingKeys = normalizeOverlayHotkeySettings(userSettings)
 const hotkeyConflictResolvedOnLoad = ensureManualAndTexthookerHotkeysDistinct("settings-load");
 const gsmOwnedSettingsNormalized = syncGsmOwnedOverlaySettingsFromGSM("settings-load");
 if (
-  dictionaryReaderNormalized ||
   websocketEndpointsNormalized ||
   texthookerUrlNormalized ||
   furiganaSettingsNormalized ||
@@ -6581,7 +6572,7 @@ async function startOverlayAppImpl() {
   // ===========================================================
 
   isDev = !app.isPackaged;
-  const dictionaryReader = normalizeDictionaryReader(userSettings.dictionaryReader);
+  const dictionaryReader = resolveDictionaryReaderFromConfigData(getGSMSettings());
   const extDir = isDev ? path.join(__dirname, 'yomitan') : path.join(getPackagedResourcesPath(), "yomitan");
 
   // 1. Define Paths
@@ -7773,8 +7764,6 @@ async function startOverlayAppImpl() {
     }
     if (key === "showRecycledIndicator") {
       value = value === true;
-    } else if (key === "dictionaryReader") {
-      value = normalizeDictionaryReader(value);
     } else if (key === "fontSize") {
       value = normalizeFloatingWindowFontSize(value);
     } else if (key === "gamepadServerPort" && INPUT_SERVER_MANAGED_BY_GSM) {
