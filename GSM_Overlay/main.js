@@ -749,6 +749,7 @@ let isDev = false;
 let yomitanExt;
 let hachidoriExt;
 let hachidoriEngineWindow = null;
+let hachidoriOwnedEngineWatcherInstalled = false;
 let jitenReaderExt;
 
 // Chromium's session.fetch can terminate the standalone Electron process on
@@ -3418,6 +3419,34 @@ async function loadExtension(name) {
   }
 }
 
+// hoshidicts keeps dictionaries in OPFS behind exclusive sync access handles, so a
+// second engine context on the same origin makes imports fail with "FS error". The
+// hosted window below is only for hosts without Chrome's offscreen-document lifecycle
+// API; once Hachidori creates its own offscreen document, ours is redundant.
+function watchForHachidoriOwnedEngine() {
+  if (!hachidoriExt || hachidoriOwnedEngineWatcherInstalled) {
+    return;
+  }
+  hachidoriOwnedEngineWatcherInstalled = true;
+  const engineUrl = `chrome-extension://${hachidoriExt.id}/offscreen.html`;
+  app.on('web-contents-created', (_event, contents) => {
+    const yieldHostedEngine = () => {
+      const hosted = hachidoriEngineWindow;
+      try {
+        if (contents.isDestroyed() || contents.getURL() !== engineUrl) return;
+        if (!hosted || hosted.isDestroyed() || hosted.webContents.id === contents.id) return;
+      } catch {
+        return;
+      }
+      console.log('[Hachidori] Extension owns its dictionary engine; releasing the redundant hosted one.');
+      hachidoriEngineWindow = null;
+      hosted.destroy();
+    };
+    contents.once('did-finish-load', yieldHostedEngine);
+    contents.once('did-navigate', yieldHostedEngine);
+  });
+}
+
 async function createHachidoriEngineWindow() {
   if (!hachidoriExt) {
     return false;
@@ -3425,6 +3454,8 @@ async function createHachidoriEngineWindow() {
   if (hachidoriEngineWindow && !hachidoriEngineWindow.isDestroyed()) {
     return true;
   }
+
+  watchForHachidoriOwnedEngine();
 
   const engineWindow = new BrowserWindow({
     show: false,
